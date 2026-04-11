@@ -1,0 +1,130 @@
+env:
+  rows: 50
+  cols: 50
+  seed: 2025
+  map_size: 100
+  action_dim: 4
+  # 使用坐标+目标向量+惯导误差作为观测（x,y,dx,dy,ins_error）
+  obs_dim: 5
+  ins_error_threshold: 15
+  cannot_drive_depth: 0.5
+  deep_depth_threshold: 0.13
+
+runtime:
+  # 服务器模式：true 时强制 matplotlib 使用 Agg 无头后端
+  server_mode: false
+  
+
+agent:
+  gamma: 0.99
+  lr: 0.0003
+  epsilon_start: 1.0
+  epsilon_end: 0.01
+  # Q-learning 学习率（alpha）用于表格更新
+  alpha: 0.01
+  # epsilon 衰减步数（用于指数衰减），可以覆盖为具体训练时的值
+  epsilon_decay_steps: 4000
+
+reward:
+  # 从“单目标靠近”过渡到“多目标平衡”（靠近、地形、海流、电量）
+  step_penalty: 0.06
+  out_of_bounds_penalty: 4.0
+  energy_exhausted_penalty: 3.0
+  ins_diverged_penalty: 3.0
+  goal_reward_base: 15.0
+  goal_energy_bonus: 5.0
+  progress_reward_scale: 20.0
+  move_away_penalty_scale: 1.2
+  revisit_penalty_base: 0.12
+  revisit_penalty_cap: 0.6
+  # 地形/海流奖励增强：提高权重并提供分量放大系数
+  terrain_reward_weight: 2
+  current_reward_weight: 7
+  approach_reward_weight: 0.6
+  terrain_step_scale: 1
+  current_step_scale: 1
+  terrain_component_clip: 0.5
+  current_component_clip: 0.5
+  # 连续能耗（A方案）：每步基础耗能 + 逆流附加耗能
+  energy_base_cost: 1.0
+  reverse_current_energy_scale: 0.3
+  energy_reward_weight: 0.05
+  beacon_reward_value: 0.2
+
+stage:
+  # 固定三阶段调度（A方案）
+  schedule_type: episode
+  ep_phase1_ratio: 0.2
+  ep_phase2_ratio: 0.6
+
+buffer:
+  capacity: 500000
+  # capacity: 500000
+
+train:
+  # 主算法选择：q_learning / double_dqn
+  algorithm: double_dqn
+  # 训练模式：normal(从头训练) / resume(断点续训)
+  mode: normal
+  # mode=resume 时指定 checkpoint 文件路径
+  resume_checkpoint_path: ""
+  total_steps: 30000
+  # algorithm: q_learning
+  # total_steps: 50000
+  batch_size: 128
+  target_update: 1000
+  eval_interval: 5000
+  # Q-learning 专用配置
+  max_episodes: 20000
+  max_steps_per_episode: 500
+  eval_episodes: 10
+
+checkpoint:
+  # 每 N 轮保存一次覆盖式 checkpoint（100覆盖200覆盖300...）
+  periodic_interval: 100
+  # 周期checkpoint文件名（固定文件名实现覆盖）
+  periodic_filename: dqn_model_periodic.pt
+  # 断点续训时默认恢复 replay buffer
+  save_buffer: true
+
+dqn:
+  # 建议首轮先关闭阶段奖励调度，建立稳态基线
+  use_stage_schedule: false
+  fixed_stage: optimization
+  # 回放池patch重建开关：true时仅存坐标元数据，sample时重建patch
+  reconstruct_patch_on_sample: true
+  # 地图缓存张量化并驻留GPU（配合patch重建）
+  cache_maps_on_gpu: true
+  # 目标先验图缓存上限（按 goal_x/goal_y/step_total 进行缓存）
+  goal_prior_cache_size: 64
+  patch_small: 11
+  patch_large: 21
+  hidden_dim: 128
+  tau: 0.005
+  n_step: 3
+  per_alpha: 0.6
+  per_beta_start: 0.4
+  per_beta_end: 1.0
+  warmup_steps: 2000
+  updates_per_step: 1
+  grad_clip: 10.0
+  device: cuda
+
+beacon:
+  beacon_signal_area: 5
+  beacon_locations:
+    -  [19, 6]
+    -  [15, 15]
+    -  [25, 20]
+    -  [25, 36]
+    -  [40, 40]
+    -  [10, 25]
+    -  [12, 36]
+    -  [32, 25]
+    -  [40, 31]
+    -  [6, 6]
+    -  [6, 15]
+    -  [30, 5]
+    -  [40, 5]
+    -  [40, 15]
+    -  [40, 22]

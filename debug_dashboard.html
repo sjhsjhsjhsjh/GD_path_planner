@@ -1,0 +1,1486 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>强化学习训练可视化仪表板</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 30px;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            border-bottom: 3px solid #667eea;
+            padding-bottom: 20px;
+        }
+        
+        .header h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+        }
+        
+        .header p {
+            color: #666;
+            font-size: 1em;
+        }
+        
+        .controls {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        .control-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        
+        label {
+            font-weight: 600;
+            color: #333;
+            min-width: 100px;
+        }
+        
+        input[type="number"] {
+            padding: 10px 15px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 1em;
+            width: 150px;
+            transition: border-color 0.3s;
+        }
+        
+        input[type="number"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        button {
+            padding: 10px 25px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: 600;
+            transition: background 0.3s;
+        }
+        
+        button:hover {
+            background: #5568d3;
+        }
+        
+        button:active {
+            transform: scale(0.98);
+        }
+        
+        .info-block {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .info-block h3 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+        
+        .info-content {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+        
+        .info-item {
+            padding: 10px;
+            background: white;
+            border-radius: 6px;
+            border: 1px solid #ddd;
+        }
+        
+        .info-item label {
+            display: block;
+            font-size: 0.85em;
+            color: #666;
+            margin-bottom: 5px;
+            min-width: auto;
+        }
+        
+        .info-value {
+            display: block;
+            font-size: 1.2em;
+            font-weight: 700;
+            color: #333;
+        }
+        
+        .charts-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+            gap: 30px;
+            margin-top: 30px;
+        }
+        
+        .chart-wrapper {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            border-top: 4px solid #667eea;
+        }
+        
+        .chart-wrapper h3 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.3em;
+        }
+        
+        .chart-canvas-wrapper {
+            position: relative;
+            height: 400px;
+        }
+        
+        .error-message {
+            background: #fee;
+            color: #c33;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            border-left: 4px solid #c33;
+        }
+        
+        .success-message {
+            background: #efe;
+            color: #3c3;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            border-left: 4px solid #3c3;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+            font-size: 1.1em;
+        }
+        
+        .loading::after {
+            content: '';
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #ddd;
+            border-top-color: #667eea;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-left: 10px;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .step-details {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 30px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .step-details h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+        }
+        
+        .step-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .step-table th {
+            background: #667eea;
+            color: white;
+            padding: 10px;
+            text-align: left;
+            font-weight: 600;
+        }
+        
+        .step-table td {
+            padding: 8px 10px;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .step-table tbody tr:hover {
+            background: #e8e9ff;
+        }
+
+        .trajectory-section {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 30px;
+            border: 1px solid #dde3f0;
+        }
+
+        .trajectory-section h3 {
+            color: #667eea;
+            margin-bottom: 12px;
+        }
+
+        .trajectory-layout {
+            display: grid;
+            grid-template-columns: minmax(320px, 1fr) 280px;
+            gap: 20px;
+            align-items: start;
+        }
+
+        .trajectory-canvas-wrapper {
+            position: relative;
+            background: white;
+            border-radius: 10px;
+            border: 1px solid #dfe5f3;
+            padding: 14px;
+        }
+
+        .trajectory-canvas {
+            display: block;
+            width: 100%;
+            max-width: 860px;
+            aspect-ratio: 1 / 1;
+            border-radius: 8px;
+            background: #fbfcff;
+            cursor: crosshair;
+        }
+
+        .trajectory-tooltip {
+            position: absolute;
+            min-width: 220px;
+            max-width: 320px;
+            background: rgba(19, 24, 39, 0.94);
+            color: white;
+            padding: 12px;
+            border-radius: 8px;
+            box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
+            pointer-events: none;
+            opacity: 0;
+            transform: translate(10px, 10px);
+            transition: opacity 0.12s ease;
+            z-index: 5;
+        }
+
+        .trajectory-tooltip.visible {
+            opacity: 1;
+        }
+
+        .trajectory-tooltip .title {
+            font-weight: 700;
+            margin-bottom: 8px;
+            color: #b6c7ff;
+        }
+
+        .trajectory-tooltip .meta {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 6px 12px;
+            font-size: 12px;
+            margin-bottom: 10px;
+        }
+
+        .trajectory-tooltip .reward-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 4px 10px;
+            font-size: 12px;
+        }
+
+        .trajectory-meta {
+            display: grid;
+            gap: 10px;
+        }
+
+        .trajectory-meta-card {
+            background: white;
+            border-radius: 8px;
+            border: 1px solid #dde3f0;
+            padding: 12px 14px;
+        }
+
+        .trajectory-meta-card h4 {
+            color: #44516b;
+            margin-bottom: 8px;
+            font-size: 0.95em;
+        }
+
+        .trajectory-meta-list {
+            display: grid;
+            gap: 8px;
+            color: #444;
+            font-size: 0.92em;
+        }
+
+        .legend-scale {
+            height: 12px;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #ff3b3b, #d81b60, #9c27b0, #6a00ff);
+        }
+
+        .legend-labels {
+            display: flex;
+            justify-content: space-between;
+            color: #666;
+            font-size: 0.84em;
+            margin-top: 6px;
+        }
+
+        .trajectory-note {
+            color: #666;
+            font-size: 0.9em;
+            line-height: 1.5;
+        }
+
+        @media (max-width: 1100px) {
+            .trajectory-layout {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 训练日志查看面板</h1>
+            <p>GPT-5.4 生成</p>
+        </div>
+        
+        <div class="controls">
+            <div class="control-group">
+                <label for="episodeInput">选择Episode:</label>
+                <input type="number" id="episodeInput" placeholder="输入episode号" min="0" value="0">
+                <button onclick="loadEpisodeData()">查询</button>
+            </div>
+            <div class="control-group">
+                <span id="totalEpisodes" style="color: #666; font-weight: 500;"></span>
+            </div>
+        </div>
+        
+        <div id="messageArea"></div>
+        
+        <div id="debugPanel" style="display: none; background: #f0f0f0; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 2px solid #ddd; max-height: 300px; overflow-y: auto;">
+            <h3 style="color: #333; margin-bottom: 10px;">🔍 调试信息</h3>
+            <pre id="debugContent" style="background: white; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 12px;"></pre>
+            <button onclick="document.getElementById('debugPanel').style.display='none'" style="margin-top: 10px;">关闭调试面板</button>
+        </div>
+        <div id="infoBlock" class="info-block" style="display: none;">
+            <h3>📊 Episode 信息</h3>
+            <div class="info-content">
+                <div class="info-item">
+                    <label>Episode</label>
+                    <span id="infoEpisode" class="info-value">-</span>
+                </div>
+                <div class="info-item">
+                    <label>总奖励</label>
+                    <span id="infoTotalReward" class="info-value">-</span>
+                </div>
+                <div class="info-item">
+                    <label>步数</label>
+                    <span id="infoSteps" class="info-value">-</span>
+                </div>
+                <div class="info-item">
+                    <label>Epsilon (探索率)</label>
+                    <span id="infoEpsilon" class="info-value">-</span>
+                </div>
+                <div class="info-item">
+                    <label>平均单步奖励</label>
+                    <span id="infoAvgReward" class="info-value">-</span>
+                </div>
+            </div>
+        </div>
+
+        <div id="trajectorySection" class="trajectory-section" style="display: none;">
+            <h3>🗺️ Episode 轨迹地图</h3>
+            <div class="trajectory-layout">
+                <div class="trajectory-canvas-wrapper" id="trajectoryCanvasWrapper">
+                    <canvas id="trajectoryCanvas" class="trajectory-canvas" width="920" height="920"></canvas>
+                    <div id="trajectoryTooltip" class="trajectory-tooltip"></div>
+                </div>
+                <div class="trajectory-meta">
+                    <div class="trajectory-meta-card">
+                        <h4>轨迹摘要</h4>
+                        <div id="trajectorySummary" class="trajectory-meta-list"></div>
+                    </div>
+                    <div class="trajectory-meta-card">
+                        <h4>INS 误差颜色</h4>
+                        <div class="legend-scale"></div>
+                        <div class="legend-labels">
+                            <span>低</span>
+                            <span>高</span>
+                        </div>
+                    </div>
+                    <div class="trajectory-meta-card">
+                        <h4>图层说明</h4>
+                        <div class="trajectory-note">
+                            地形背景基于 environment_grid.csv 中的 seafloor 列绘制，青色覆盖层表示 beacon_strength，轨迹颜色表示当前步的 INS 误差。鼠标悬停到轨迹点上可查看该步 reward 详情。
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="charts-container" id="charts" style="display: none;">
+            <div class="chart-wrapper">
+                <h3>💰 奖励分解 (饼图)</h3>
+                <div class="chart-canvas-wrapper">
+                    <canvas id="rewardPieChart"></canvas>
+                </div>
+            </div>
+            
+            <div class="chart-wrapper">
+                <h3>📈 奖励分解 (柱状图)</h3>
+                <div class="chart-canvas-wrapper">
+                    <canvas id="rewardBarChart"></canvas>
+                </div>
+            </div>
+            
+            <div class="chart-wrapper">
+                <h3>🔄 累计奖励 (按步数)</h3>
+                <div class="chart-canvas-wrapper">
+                    <canvas id="cumulativeChart"></canvas>
+                </div>
+            </div>
+        </div>
+        
+        <div id="stepDetails" class="step-details" style="display: none;">
+            <h3>📋 每步奖励详情</h3>
+            <table class="step-table">
+                <thead>
+                    <tr id="rewardComponentsHeader"></tr>
+                </thead>
+                <tbody id="stepTableBody">
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // 输出目录的基础路径 - 相对于HTML文件位置
+        const OUTPUT_BASE_PATH = './outputs';
+        const ENVIRONMENT_GRID_FILE = 'environment_grid.csv';
+        const REWARD_COMPONENT_COLUMNS = [
+            'step_penalty',
+            'boundary_penalty',
+            'energy_penalty',
+            'ins_penalty',
+            'revisit_penalty',
+            'goal_reward',
+            'approach_reward',
+            'terrain_reward',
+            'current_reward',
+            'energy_reward',
+            'beacon_reward'
+        ];
+        const TOTAL_REWARD_COLUMN = 'step_reward';
+        
+        let trainLog = [];
+        let stepRewards = [];
+        let rewardColumns = [];
+        let environmentGrid = null;
+        let currentCharts = {};
+        let currentTrajectoryState = null;
+
+        // 初始化：加载数据
+        async function initDashboard() {
+            try {
+                showMessage('日志文件较大，加载中...', 'loading');
+                await loadLatestData();
+                hideMessage();
+            } catch (error) {
+                const detailMsg = error.message + '<br><br><strong>调试提示：</strong>调试面板已在下方打开，显示具体的目录扫描结果和错误信息。';
+                showMessage('初始化失败: ' + detailMsg, 'error');
+                showDebug('❌ 加载失败:\n\n' + error.message);
+                console.error(error);
+            }
+        }
+        
+        // 显示调试信息
+        function showDebug(text) {
+            const panel = document.getElementById('debugPanel');
+            const content = document.getElementById('debugContent');
+            const oldText = content.textContent;
+            if (oldText) {
+                content.textContent = oldText + '\n\n---\n\n' + text;
+            } else {
+                content.textContent = text;
+            }
+            panel.style.display = 'block';
+        }
+
+        // 加载最新的输出数据
+        async function loadLatestData() {
+            try {
+                // 步骤1: 列出所有日期目录
+                const outputResponse = await fetch(OUTPUT_BASE_PATH + '/');
+                if (!outputResponse.ok) {
+                    throw new Error('无法访问 outputs 目录（确保相对路径正确）');
+                }
+                const outputHtml = await outputResponse.text();
+                console.log('outputs 目录HTML (前500字):', outputHtml.substring(0, 500));
+                
+                // 正则表达式：匹配 "日期" 格式的目录名 (例如: 2026-03-12)
+                // 尝试多种可能的HTML格式
+                let dateMatches = outputHtml.match(/href="([0-9]{4}-[0-9]{2}-[0-9]{2})\/"/g);
+                
+                // 备用方案：尝试没有斜杠的格式
+                if (!dateMatches) {
+                    dateMatches = outputHtml.match(/href="([0-9]{4}-[0-9]{2}-[0-9]{2})"/g);
+                }
+                
+                // 再次备用：尝试任意地方的日期格式
+                if (!dateMatches) {
+                    dateMatches = outputHtml.match(/([0-9]{4}-[0-9]{2}-[0-9]{2})/g);
+                }
+                
+                if (!dateMatches || dateMatches.length === 0) {
+                    console.error('无法用正则表达式匹配。完整HTML:', outputHtml);
+                    showDebug('输出目录列表HTML内容:\n\n' + outputHtml.substring(0, 2000) + '\n\n... (显示前2000字符)');
+                    throw new Error('未找到日期格式的目录 (格式应为 YYYY-MM-DD)。详见下方调试面板。');
+                }
+                
+                // 提取最新的日期目录
+                const dates = dateMatches.map(m => {
+                    const match = m.match(/([0-9]{4}-[0-9]{2}-[0-9]{2})/);
+                    return match ? match[1] : null;
+                }).filter(d => d !== null);
+                
+                if (dates.length === 0) {
+                    throw new Error('无法提取日期目录名称');
+                }
+                
+                const latestDate = dates.sort().pop();
+                
+                console.log('找到日期目录:', latestDate);
+                showDebug('✅ 找到日期目录: ' + latestDate + '\n\n找到的所有日期: ' + dates.join(', '));
+                
+                // 步骤2: 列出该日期目录下的时间目录
+                const dateDir = OUTPUT_BASE_PATH + '/' + latestDate + '/';
+                const dateResponse = await fetch(dateDir);
+                if (!dateResponse.ok) {
+                    throw new Error('无法访问日期目录: ' + latestDate);
+                }
+                const dateHtml = await dateResponse.text();
+                console.log('日期目录HTML (前500字):', dateHtml.substring(0, 500));
+                
+                // 正则表达式：匹配 "时间" 格式的目录名 (例如: 01-08-25)
+                let timeMatches = dateHtml.match(/href="([0-9]{2}-[0-9]{2}-[0-9]{2})\/"/g);
+                
+                // 备用方案：尝试没有斜杠的格式
+                if (!timeMatches) {
+                    timeMatches = dateHtml.match(/href="([0-9]{2}-[0-9]{2}-[0-9]{2})"/g);
+                }
+                
+                // 再次备用：尝试任意地方的时间格式，排除年份子串（如 2026-03-12 中的 26-03-12）
+                if (!timeMatches) {
+                    timeMatches = dateHtml.match(/(?<![0-9])([0-9]{2}-[0-9]{2}-[0-9]{2})(?![0-9])/g);
+                }
+                
+                if (!timeMatches || timeMatches.length === 0) {
+                    console.error('无法用正则表达式匹配。完整HTML:', dateHtml);
+                    showDebug('日期目录 ' + latestDate + ' 的内容:\n\n' + dateHtml.substring(0, 2000) + '\n\n... (显示前2000字符)');
+                    throw new Error('未找到时间格式的目录 (格式应为 HH-MM-SS)。详见下方调试面板。');
+                }
+                
+                // 提取最新的时间目录
+                const times = timeMatches.map(m => {
+                    const match = m.match(/([0-9]{2}-[0-9]{2}-[0-9]{2})/);
+                    return match ? match[1] : null;
+                }).filter(t => t !== null);
+                
+                if (times.length === 0) {
+                    throw new Error('无法提取时间目录名称');
+                }
+                
+                const latestTime = times.sort().pop();
+                
+                console.log('找到时间目录:', latestTime);
+                
+                // 步骤3: 加载CSV文件
+                const dataPath = OUTPUT_BASE_PATH + '/' + latestDate + '/' + latestTime + '/';
+                console.log('数据路径:', dataPath);
+                showDebug('✅ 找到时间目录: ' + latestTime + '\n\n找到的所有时间: ' + times.join(', ') + '\n\n📁 最终数据路径: ' + dataPath);
+                
+                // 尝试列出目录内容
+                const dirResponse = await fetch(dataPath);
+                if (dirResponse.ok) {
+                    const dirHtml = await dirResponse.text();
+                    const fileMatches = dirHtml.match(/href="([^"]*\.csv)"/g);
+                    if (fileMatches) {
+                        const files = fileMatches.map(m => m.match(/href="([^"]*)"/)[1]);
+                        showDebug('📂 目录中的CSV文件: ' + files.join(', '));
+                    }
+                }
+                
+                // 加载 train_log.csv
+                const trainLogResponse = await fetch(dataPath + 'train_log.csv');
+                if (!trainLogResponse.ok) {
+                    throw new Error('无法加载 train_log.csv (404 或其他错误)。尝试访问: ' + dataPath + 'train_log.csv');
+                }
+                const trainLogText = await trainLogResponse.text();
+                trainLog = parseCSV(trainLogText);
+                console.log('成功加载 train_log，episodes 数:', trainLog.length);
+                showDebug('✅ 成功加载 train_log.csv - ' + trainLog.length + ' 个 episodes');
+                
+                // 加载 step_rewards.csv
+                const stepRewardsResponse = await fetch(dataPath + 'step_rewards.csv');
+                if (!stepRewardsResponse.ok) {
+                    throw new Error('无法加载 step_rewards.csv (404 或其他错误)。尝试访问: ' + dataPath + 'step_rewards.csv');
+                }
+                const stepRewardsText = await stepRewardsResponse.text();
+                const result = parseStepRewardsCSV(stepRewardsText);
+                stepRewards = result.data;
+                rewardColumns = result.columns;
+                console.log('成功加载 step_rewards，奖励分量:', rewardColumns);
+                showDebug('✅ 成功加载 step_rewards.csv - 奖励分量: ' + rewardColumns.join(', '));
+
+                // 加载 environment_grid.csv
+                const environmentResponse = await fetch(dataPath + ENVIRONMENT_GRID_FILE);
+                if (environmentResponse.ok) {
+                    const environmentText = await environmentResponse.text();
+                    environmentGrid = parseEnvironmentGridCSV(environmentText);
+                    showDebug('✅ 成功加载 environment_grid.csv - 网格尺寸: ' + environmentGrid.width + ' x ' + environmentGrid.height);
+                } else {
+                    environmentGrid = null;
+                    showDebug('⚠️ 未找到 environment_grid.csv，轨迹地图将退化为仅轨迹绘制。尝试访问: ' + dataPath + ENVIRONMENT_GRID_FILE);
+                }
+                
+                // 更新UI
+                document.getElementById('totalEpisodes').textContent = 
+                    `总计 ${trainLog.length} 个 Episodes (最新: ${latestDate} ${latestTime})`;
+                document.getElementById('episodeInput').max = trainLog.length - 1;
+                
+                // 加载第一个episode的数据
+                loadEpisodeData();
+        }catch (error) {
+                showDebug('❌ loadLatestData 失败:\n\n' + error.message);
+                throw error;
+            }
+        }
+
+
+        // 解析CSV格式的数据
+        function parseCSV(csvText) {
+            const lines = csvText.trim().split('\n');
+            if (lines.length < 2) return [];
+            
+            const headers = lines[0].split(',').map(h => h.trim());
+            const data = [];
+            
+            for (let i = 1; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (!line) continue;
+                
+                const values = line.split(',').map(v => v.trim());
+                const row = {};
+                headers.forEach((header, index) => {
+                    const value = values[index];
+                    row[header] = isNaN(value) ? value : parseFloat(value);
+                });
+                data.push(row);
+            }
+            
+            return data;
+        }
+
+        // 解析 step_rewards.csv - 特殊处理，因为要合并同一个episode的多行
+        function parseStepRewardsCSV(csvText) {
+            const lines = csvText.trim().split('\n');
+            if (lines.length < 2) return { data: {}, columns: [] };
+            
+            const headers = lines[0].split(',').map(h => h.trim());
+            const episodeIndex = headers.indexOf('episode');
+            const stepIndex = headers.indexOf('step');
+            
+            if (episodeIndex === -1) {
+                console.warn('未找到 episode 列');
+                return { data: {}, columns: headers };
+            }
+            
+            const data = {};
+            const rewardCols = [
+                ...REWARD_COMPONENT_COLUMNS.filter(col => headers.includes(col)),
+                ...([TOTAL_REWARD_COLUMN].filter(col => headers.includes(col)))
+            ];
+            
+            for (let i = 1; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (!line) continue;
+                
+                const values = line.split(',').map(v => v.trim());
+                const episode = parseInt(values[episodeIndex]);
+                const step = stepIndex !== -1 ? parseInt(values[stepIndex]) : i - 1;
+                
+                if (!data[episode]) {
+                    data[episode] = [];
+                }
+                
+                const row = { step };
+                headers.forEach((header, index) => {
+                    if (!['episode', 'step'].includes(header)) {
+                        row[header] = isNaN(values[index]) ? values[index] : parseFloat(values[index]);
+                    }
+                });
+                
+                data[episode].push(row);
+            }
+            
+            return { data, columns: rewardCols };
+        }
+
+        function parseEnvironmentGridCSV(csvText) {
+            const rows = parseCSV(csvText);
+            if (!rows.length) {
+                throw new Error('environment_grid.csv 中没有数据');
+            }
+
+            let maxX = 0;
+            let maxY = 0;
+            rows.forEach(row => {
+                maxX = Math.max(maxX, Number(row.x) || 0);
+                maxY = Math.max(maxY, Number(row.y) || 0);
+            });
+
+            const width = maxX + 1;
+            const height = maxY + 1;
+            const seafloor = createGrid(width, height, 0);
+            const beaconStrength = createGrid(width, height, 0);
+            const beaconId = createGrid(width, height, 0);
+            const uFlow = createGrid(width, height, 0);
+            const vFlow = createGrid(width, height, 0);
+
+            let terrainMin = Infinity;
+            let terrainMax = -Infinity;
+            let maxBeaconStrength = 0;
+
+            rows.forEach(row => {
+                const x = Number(row.x) || 0;
+                const y = Number(row.y) || 0;
+                const terrain = Number(row.seafloor) || 0;
+                const beacon = Number(row.beacon_strength) || 0;
+                seafloor[x][y] = terrain;
+                beaconStrength[x][y] = beacon;
+                beaconId[x][y] = Number(row.beacon_id) || 0;
+                uFlow[x][y] = Number(row.u_flow) || 0;
+                vFlow[x][y] = Number(row.v_flow) || 0;
+                terrainMin = Math.min(terrainMin, terrain);
+                terrainMax = Math.max(terrainMax, terrain);
+                maxBeaconStrength = Math.max(maxBeaconStrength, beacon);
+            });
+
+            return {
+                width,
+                height,
+                seafloor,
+                beaconStrength,
+                beaconId,
+                uFlow,
+                vFlow,
+                terrainMin: Number.isFinite(terrainMin) ? terrainMin : 0,
+                terrainMax: Number.isFinite(terrainMax) ? terrainMax : 1,
+                maxBeaconStrength,
+            };
+        }
+
+        function createGrid(width, height, fillValue) {
+            return Array.from({ length: width }, () => Array(height).fill(fillValue));
+        }
+
+        // 加载指定episode的数据
+        function loadEpisodeData() {
+            const episodeNum = parseInt(document.getElementById('episodeInput').value);
+            
+            if (isNaN(episodeNum) || episodeNum < 0 || episodeNum >= trainLog.length) {
+                showMessage(`请输入有效的 Episode 号 (0-${trainLog.length - 1})`, 'error');
+                return;
+            }
+            
+            const episodeData = trainLog[episodeNum];
+            const episodeSteps = stepRewards[episodeNum] || [];
+            
+            if (!episodeData) {
+                showMessage('未找到该 Episode 的数据', 'error');
+                return;
+            }
+            
+            // 更新信息块
+            document.getElementById('infoEpisode').textContent = episodeNum;
+            document.getElementById('infoTotalReward').textContent = 
+                episodeData.total_reward ? episodeData.total_reward.toFixed(2) : 'N/A';
+            document.getElementById('infoSteps').textContent = 
+                episodeData.steps || episodeSteps.length;
+            document.getElementById('infoEpsilon').textContent = 
+                episodeData.epsilon ? episodeData.epsilon.toFixed(4) : 'N/A';
+            
+            const avgReward = episodeData.steps ? 
+                (episodeData.total_reward / episodeData.steps).toFixed(4) : 'N/A';
+            document.getElementById('infoAvgReward').textContent = avgReward;
+            document.getElementById('infoBlock').style.display = 'block';
+            
+            // 呈现图表和详情
+            renderCharts(episodeSteps);
+            renderStepDetails(episodeSteps);
+            renderTrajectory(episodeNum, episodeData, episodeSteps);
+            document.getElementById('charts').style.display = 'grid';
+            document.getElementById('stepDetails').style.display = 'block';
+            document.getElementById('trajectorySection').style.display = 'block';
+            
+            hideMessage();
+        }
+
+        function renderTrajectory(episodeNum, episodeData, episodeSteps) {
+            const trajectory = buildEpisodeTrajectory(episodeNum, episodeData, episodeSteps);
+            if (!trajectory.points.length) {
+                currentTrajectoryState = null;
+                return;
+            }
+
+            drawTrajectory(trajectory, null);
+            updateTrajectorySummary(trajectory);
+        }
+
+        function buildEpisodeTrajectory(episodeNum, episodeData, episodeSteps) {
+            const steps = [...episodeSteps].sort((a, b) => (a.step || 0) - (b.step || 0));
+            if (!steps.length) {
+                return {
+                    episode: episodeNum,
+                    points: [],
+                    totalReward: Number(episodeData.total_reward) || 0,
+                    steps: 0,
+                    terminationReason: 'N/A',
+                    maxInsError: 0,
+                    finalInsError: 0,
+                };
+            }
+
+            const first = steps[0];
+            const start = {
+                x: Number(first.last_pos_x ?? first.pos_x ?? 0),
+                y: Number(first.last_pos_y ?? first.pos_y ?? 0),
+            };
+            const goal = {
+                x: Number(first.goal_x ?? 0),
+                y: Number(first.goal_y ?? 0),
+            };
+
+            const points = [{
+                kind: 'start',
+                step: 0,
+                x: start.x,
+                y: start.y,
+                action: 'START',
+                ins_error: 0,
+                step_reward: 0,
+                terminated: 0,
+                termination_reason: 'running',
+            }];
+
+            steps.forEach(step => {
+                points.push({
+                    kind: 'step',
+                    step: Number(step.step) || 0,
+                    x: Number(step.pos_x ?? 0),
+                    y: Number(step.pos_y ?? 0),
+                    action: step.action,
+                    ins_error: Number(step.ins_error) || 0,
+                    step_reward: Number(step[TOTAL_REWARD_COLUMN]) || 0,
+                    terminated: Number(step.terminated) || 0,
+                    termination_reason: step.termination_reason || 'running',
+                    distance_before: Number(step.distance_before) || 0,
+                    distance_after: Number(step.distance_after) || 0,
+                    energy_remaining: Number(step.energy_remaining) || 0,
+                    ...REWARD_COMPONENT_COLUMNS.reduce((acc, column) => {
+                        acc[column] = Number(step[column]) || 0;
+                        return acc;
+                    }, {}),
+                });
+            });
+
+            return {
+                episode: episodeNum,
+                start,
+                goal,
+                points,
+                totalReward: Number(episodeData.total_reward) || steps.reduce((sum, step) => sum + (Number(step[TOTAL_REWARD_COLUMN]) || 0), 0),
+                steps: Number(episodeData.steps) || steps.length,
+                epsilon: Number(episodeData.epsilon) || 0,
+                terminationReason: steps[steps.length - 1].termination_reason || 'running',
+                maxInsError: Math.max(...points.map(point => Number(point.ins_error) || 0), 0),
+                finalInsError: Number(steps[steps.length - 1].ins_error) || 0,
+            };
+        }
+
+        function drawTrajectory(trajectory, highlightedIndex) {
+            const canvas = document.getElementById('trajectoryCanvas');
+            const ctx = canvas.getContext('2d');
+            const env = environmentGrid;
+            const fallbackWidth = Math.max(...trajectory.points.map(point => point.x), trajectory.goal.x, trajectory.start.x) + 1;
+            const fallbackHeight = Math.max(...trajectory.points.map(point => point.y), trajectory.goal.y, trajectory.start.y) + 1;
+            const cols = env ? env.width : Math.max(fallbackWidth, 1);
+            const rows = env ? env.height : Math.max(fallbackHeight, 1);
+            const margin = 30;
+            const size = canvas.width - margin * 2;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawTrajectoryBackground(ctx, cols, rows, margin, size);
+
+            const renderPoints = trajectory.points.map((point, index) => {
+                const canvasPoint = toCanvasPoint(point.x, point.y, cols, rows, margin, size);
+                return {
+                    ...point,
+                    index,
+                    canvasX: canvasPoint.x,
+                    canvasY: canvasPoint.y,
+                };
+            });
+
+            for (let i = 1; i < renderPoints.length; i++) {
+                const from = renderPoints[i - 1];
+                const to = renderPoints[i];
+                ctx.beginPath();
+                ctx.moveTo(from.canvasX, from.canvasY);
+                ctx.lineTo(to.canvasX, to.canvasY);
+                ctx.strokeStyle = colorForIns(to.ins_error, trajectory.maxInsError);
+                ctx.lineWidth = 4;
+                ctx.lineCap = 'round';
+                ctx.stroke();
+            }
+
+            renderPoints.forEach(point => {
+                ctx.beginPath();
+                ctx.fillStyle = point.kind === 'start' ? '#22c55e' : colorForIns(point.ins_error, trajectory.maxInsError);
+                ctx.arc(point.canvasX, point.canvasY, point.index === highlightedIndex ? 7 : 4.5, 0, Math.PI * 2);
+                ctx.fill();
+                if (point.index === highlightedIndex) {
+                    ctx.strokeStyle = '#111';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+            });
+
+            drawGoalMarker(ctx, trajectory.goal, cols, rows, margin, size);
+
+            currentTrajectoryState = {
+                trajectory,
+                renderPoints,
+                cols,
+                rows,
+                margin,
+                size,
+            };
+        }
+
+        function drawTrajectoryBackground(ctx, cols, rows, margin, size) {
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+            const cell = size / Math.max(cols, rows);
+            const drawWidth = cols * cell;
+            const drawHeight = rows * cell;
+            const offsetX = margin + (size - drawWidth) / 2;
+            const offsetY = margin + (size - drawHeight) / 2;
+
+            if (environmentGrid) {
+                for (let x = 0; x < cols; x++) {
+                    for (let y = 0; y < rows; y++) {
+                        const terrain = environmentGrid.seafloor[x][y];
+                        ctx.fillStyle = terrainColor(terrain, environmentGrid.terrainMin, environmentGrid.terrainMax);
+                        ctx.fillRect(offsetX + x * cell, offsetY + (rows - y - 1) * cell, cell + 0.5, cell + 0.5);
+                    }
+                }
+
+                if (environmentGrid.maxBeaconStrength > 0) {
+                    for (let x = 0; x < cols; x++) {
+                        for (let y = 0; y < rows; y++) {
+                            const strength = environmentGrid.beaconStrength[x][y];
+                            if (strength > 0) {
+                                const alpha = 0.08 + 0.28 * (strength / environmentGrid.maxBeaconStrength);
+                                ctx.fillStyle = `rgba(0, 198, 255, ${alpha.toFixed(3)})`;
+                                ctx.fillRect(offsetX + x * cell, offsetY + (rows - y - 1) * cell, cell + 0.5, cell + 0.5);
+                            }
+                        }
+                    }
+                }
+            } else {
+                ctx.fillStyle = '#f9fbff';
+                ctx.fillRect(offsetX, offsetY, drawWidth, drawHeight);
+            }
+
+            ctx.strokeStyle = 'rgba(30, 41, 59, 0.16)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(offsetX, offsetY, drawWidth, drawHeight);
+        }
+
+        function drawGoalMarker(ctx, goal, cols, rows, margin, size) {
+            const p = toCanvasPoint(goal.x, goal.y, cols, rows, margin, size);
+            const spikes = 5;
+            const outerRadius = 11;
+            const innerRadius = 5;
+            let rotation = Math.PI / 2 * 3;
+
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y - outerRadius);
+            for (let i = 0; i < spikes; i++) {
+                ctx.lineTo(p.x + Math.cos(rotation) * outerRadius, p.y + Math.sin(rotation) * outerRadius);
+                rotation += Math.PI / spikes;
+                ctx.lineTo(p.x + Math.cos(rotation) * innerRadius, p.y + Math.sin(rotation) * innerRadius);
+                rotation += Math.PI / spikes;
+            }
+            ctx.closePath();
+            ctx.fillStyle = '#ffd166';
+            ctx.fill();
+            ctx.strokeStyle = '#111';
+            ctx.lineWidth = 1.4;
+            ctx.stroke();
+        }
+
+        function toCanvasPoint(x, y, cols, rows, margin, size) {
+            const cell = size / Math.max(cols, rows);
+            const drawWidth = cols * cell;
+            const drawHeight = rows * cell;
+            const offsetX = margin + (size - drawWidth) / 2;
+            const offsetY = margin + (size - drawHeight) / 2;
+            return {
+                x: offsetX + (x + 0.5) * cell,
+                y: offsetY + drawHeight - (y + 0.5) * cell,
+            };
+        }
+
+        function lerp(a, b, t) {
+            return a + (b - a) * t;
+        }
+
+        function colorForIns(insError, maxInsError) {
+            const upper = Math.max(maxInsError || 0, 1);
+            const t = Math.max(0, Math.min(1, (Number(insError) || 0) / upper));
+            const stops = [
+                [255, 59, 59],
+                [216, 27, 96],
+                [156, 39, 176],
+                [106, 0, 255],
+            ];
+            const scaled = t * (stops.length - 1);
+            const idx = Math.min(stops.length - 2, Math.floor(scaled));
+            const localT = scaled - idx;
+            const c1 = stops[idx];
+            const c2 = stops[idx + 1];
+            const r = Math.round(lerp(c1[0], c2[0], localT));
+            const g = Math.round(lerp(c1[1], c2[1], localT));
+            const b = Math.round(lerp(c1[2], c2[2], localT));
+            return `rgb(${r}, ${g}, ${b})`;
+        }
+
+        function terrainColor(value, minValue, maxValue) {
+            const range = Math.max(maxValue - minValue, 1e-9);
+            const t = Math.max(0, Math.min(1, ((Number(value) || 0) - minValue) / range));
+            const deep = [25, 77, 129];
+            const shallow = [234, 211, 168];
+            const ridge = [113, 77, 53];
+            let base;
+            if (t < 0.55) {
+                const localT = t / 0.55;
+                base = [
+                    Math.round(lerp(deep[0], shallow[0], localT)),
+                    Math.round(lerp(deep[1], shallow[1], localT)),
+                    Math.round(lerp(deep[2], shallow[2], localT)),
+                ];
+            } else {
+                const localT = (t - 0.55) / 0.45;
+                base = [
+                    Math.round(lerp(shallow[0], ridge[0], localT)),
+                    Math.round(lerp(shallow[1], ridge[1], localT)),
+                    Math.round(lerp(shallow[2], ridge[2], localT)),
+                ];
+            }
+            return `rgb(${base[0]}, ${base[1]}, ${base[2]})`;
+        }
+
+        function updateTrajectorySummary(trajectory) {
+            const summary = document.getElementById('trajectorySummary');
+            summary.innerHTML = [
+                ['Episode', trajectory.episode],
+                ['路径点数', trajectory.points.length],
+                ['终止原因', trajectory.terminationReason],
+                ['最终 INS 误差', formatNumber(trajectory.finalInsError, 3)],
+                ['最大 INS 误差', formatNumber(trajectory.maxInsError, 3)],
+                ['总奖励', formatNumber(trajectory.totalReward, 3)],
+            ].map(item => `<div><strong>${item[0]}:</strong> ${item[1]}</div>`).join('');
+        }
+
+        function formatNumber(value, digits = 3) {
+            const num = Number(value);
+            return Number.isFinite(num) ? num.toFixed(digits) : 'N/A';
+        }
+
+        function findTrajectoryHit(mouseX, mouseY) {
+            if (!currentTrajectoryState || !currentTrajectoryState.renderPoints.length) {
+                return null;
+            }
+
+            let hit = null;
+            let minDistance = Infinity;
+            currentTrajectoryState.renderPoints.forEach(point => {
+                const dx = point.canvasX - mouseX;
+                const dy = point.canvasY - mouseY;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                if (distance < 12 && distance < minDistance) {
+                    minDistance = distance;
+                    hit = point;
+                }
+            });
+            return hit;
+        }
+
+        function showTrajectoryTooltip(point, wrapperX, wrapperY) {
+            const tooltip = document.getElementById('trajectoryTooltip');
+            const rewardDetailHtml = REWARD_COMPONENT_COLUMNS.map(column => {
+                const value = point[column];
+                return `<div>${column}</div><div>${formatNumber(value, 3)}</div>`;
+            }).join('');
+
+            tooltip.innerHTML = `
+                <div class="title">${point.kind === 'start' ? '起点' : 'Step ' + point.step}</div>
+                <div class="meta">
+                    <div>坐标</div><div>(${point.x}, ${point.y})</div>
+                    <div>Action</div><div>${point.action}</div>
+                    <div>INS</div><div>${formatNumber(point.ins_error, 3)}</div>
+                    <div>Step Reward</div><div>${formatNumber(point.step_reward, 3)}</div>
+                    <div>Energy</div><div>${formatNumber(point.energy_remaining, 3)}</div>
+                    <div>Terminated</div><div>${point.terminated ? '是' : '否'}</div>
+                    <div>Reason</div><div>${point.termination_reason}</div>
+                </div>
+                <div class="reward-grid">${rewardDetailHtml}</div>
+            `;
+            tooltip.style.left = `${wrapperX + 14}px`;
+            tooltip.style.top = `${wrapperY + 14}px`;
+            tooltip.classList.add('visible');
+        }
+
+        function hideTrajectoryTooltip() {
+            document.getElementById('trajectoryTooltip').classList.remove('visible');
+        }
+
+        // 绘制图表
+        function renderCharts(episodeSteps) {
+            if (episodeSteps.length === 0) {
+                showMessage('该 Episode 没有步数数据', 'error');
+                return;
+            }
+
+            const componentColumns = rewardColumns.filter(col => col !== TOTAL_REWARD_COLUMN);
+            
+            // 计算每个奖励分量的总和
+            const rewardSums = {};
+            componentColumns.forEach(col => {
+                rewardSums[col] = 0;
+            });
+            
+            episodeSteps.forEach(step => {
+                componentColumns.forEach(col => {
+                    if (step[col] !== undefined) {
+                        rewardSums[col] += parseFloat(step[col]) || 0;
+                    }
+                });
+            });
+            
+            // 过滤掉全为0的列
+            const activeColumns = componentColumns.filter(col => rewardSums[col] !== 0);
+            const activeSums = activeColumns.map(col => rewardSums[col]);
+            
+            // 生成颜色
+            const colors = generateColors(activeColumns.length);
+            
+            // 绘制饼图
+            renderPieChart(activeColumns, activeSums, colors);
+            
+            // 绘制柱状图
+            renderBarChart(activeColumns, activeSums, colors);
+            
+            // 绘制累计奖励图
+            renderCumulativeChart(episodeSteps);
+        }
+
+        // 绘制饼图
+        function renderPieChart(labels, data, colors) {
+            const ctx = document.getElementById('rewardPieChart').getContext('2d');
+            
+            // 销毁之前的图表
+            if (currentCharts.pie) currentCharts.pie.destroy();
+            
+            currentCharts.pie = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        data: data,
+                        backgroundColor: colors,
+                        borderColor: '#fff',
+                        borderWidth: 2,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: {
+                                usePointStyle: true,
+                                padding: 15,
+                                font: { size: 12 }
+                            }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const value = context.parsed;
+                                    const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                                    const percent = ((value / total) * 100).toFixed(1);
+                                    return `${context.label}: ${value.toFixed(2)} (${percent}%)`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // 绘制柱状图
+        function renderBarChart(labels, data, colors) {
+            const ctx = document.getElementById('rewardBarChart').getContext('2d');
+            
+            if (currentCharts.bar) currentCharts.bar.destroy();
+            
+            currentCharts.bar = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: '累计奖励',
+                        data: data,
+                        backgroundColor: colors,
+                        borderRadius: 6,
+                        borderSkipped: false,
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        x: {
+                            ticks: {
+                                callback: function(value) {
+                                    return value.toFixed(1);
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // 绘制累计奖励图
+        function renderCumulativeChart(episodeSteps) {
+            const ctx = document.getElementById('cumulativeChart').getContext('2d');
+            
+            if (currentCharts.cumulative) currentCharts.cumulative.destroy();
+            
+            // 计算累计奖励
+            let cumulative = 0;
+            const cumulativeData = [];
+            const stepNumbers = [];
+            
+            episodeSteps.forEach((step, index) => {
+                const stepTotal = parseFloat(step[TOTAL_REWARD_COLUMN]) || 0;
+                cumulative += stepTotal;
+                cumulativeData.push(cumulative.toFixed(2));
+                stepNumbers.push(index);
+            });
+            
+            currentCharts.cumulative = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: stepNumbers,
+                    datasets: [{
+                        label: '累计奖励',
+                        data: cumulativeData,
+                        borderColor: '#667eea',
+                        backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                        borderWidth: 3,
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: 3,
+                        pointBackgroundColor: '#667eea',
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            labels: { usePointStyle: true }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            ticks: {
+                                callback: function(value) {
+                                    return value.toFixed(1);
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // 呈现步数详情表格
+        function renderStepDetails(episodeSteps) {
+            const columns = ['step', ...rewardColumns];
+            const headerRow = document.getElementById('rewardComponentsHeader');
+            
+            // 设置表头
+            headerRow.innerHTML = columns.map(col => `<th>${col}</th>`).join('');
+            
+            // 设置行数据（仅显示前50步以避免性能问题）
+            const tbody = document.getElementById('stepTableBody');
+            tbody.innerHTML = '';
+            
+            episodeSteps.slice(0, 50).forEach((step, index) => {
+                const row = document.createElement('tr');
+                row.innerHTML = '<td>' + step.step + '</td>';
+                
+                rewardColumns.forEach(col => {
+                    const value = step[col] !== undefined ? parseFloat(step[col]).toFixed(3) : 'N/A';
+                    row.innerHTML += '<td>' + value + '</td>';
+                });
+                
+                tbody.appendChild(row);
+            });
+            
+            if (episodeSteps.length > 50) {
+                const row = document.createElement('tr');
+                row.style.color = '#999';
+                row.innerHTML = '<td colspan="' + columns.length + '">... 共 ' + episodeSteps.length + ' 步（仅显示前50步）</td>';
+                tbody.appendChild(row);
+            }
+        }
+
+        // 生成颜色
+        function generateColors(count) {
+            const colors = [
+                '#667eea', '#764ba2', '#f093fb', '#4facfe',
+                '#fa709a', '#fee140', '#30cfd0', '#330867',
+                '#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3',
+                '#f38181', '#aa96da', '#fcbad3', '#a8d8ea'
+            ];
+            
+            const result = [];
+            for (let i = 0; i < count; i++) {
+                result.push(colors[i % colors.length]);
+            }
+            return result;
+        }
+
+        // 显示消息
+        function showMessage(message, type = 'info') {
+            const area = document.getElementById('messageArea');
+            const className = type === 'loading' ? 'loading' : (type === 'error' ? 'error-message' : 'success-message');
+            area.innerHTML = `<div class="${className}">${message}</div>`;
+        }
+
+        // 隐藏消息
+        function hideMessage() {
+            document.getElementById('messageArea').innerHTML = '';
+        }
+
+        // 页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', initDashboard);
+        
+        document.getElementById('trajectoryCanvas').addEventListener('mousemove', function(event) {
+            const rect = event.target.getBoundingClientRect();
+            const scaleX = event.target.width / rect.width;
+            const scaleY = event.target.height / rect.height;
+            const mouseX = (event.clientX - rect.left) * scaleX;
+            const mouseY = (event.clientY - rect.top) * scaleY;
+            const hit = findTrajectoryHit(mouseX, mouseY);
+
+            if (!currentTrajectoryState) {
+                hideTrajectoryTooltip();
+                return;
+            }
+
+            if (hit) {
+                drawTrajectory(currentTrajectoryState.trajectory, hit.index);
+                showTrajectoryTooltip(hit, event.clientX - rect.left, event.clientY - rect.top);
+            } else {
+                drawTrajectory(currentTrajectoryState.trajectory, null);
+                hideTrajectoryTooltip();
+            }
+        });
+
+        document.getElementById('trajectoryCanvas').addEventListener('mouseleave', function() {
+            if (currentTrajectoryState) {
+                drawTrajectory(currentTrajectoryState.trajectory, null);
+            }
+            hideTrajectoryTooltip();
+        });
+        
+        window.addEventListener('resize', function() {
+            if (currentTrajectoryState) {
+                drawTrajectory(currentTrajectoryState.trajectory, null);
+            }
+        });
+        
+        // 允许回车键提交
+        document.getElementById('episodeInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                loadEpisodeData();
+            }
+        });
+    </script>
+</body>
+</html>
