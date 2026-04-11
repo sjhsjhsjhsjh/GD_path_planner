@@ -155,7 +155,7 @@ class Env:
         self.map_width = cfg.env.cols
         self.width = self.map_width
         self.height = self.map_height
-        self.defaulf_energy = min(self.map_width, self.map_height) * 0.6
+        self.defaulf_energy = min(self.map_width, self.map_height) * 0.7
         self.depth_reward_map = np.zeros((self.map_width, self.map_height))
 
         self.robot = Robot(self.defaulf_energy)

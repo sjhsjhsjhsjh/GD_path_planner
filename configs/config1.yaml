@@ -103,10 +103,14 @@ dqn:
   # 建议首轮先关闭阶段奖励调度，建立稳态基线
   use_stage_schedule: false
   fixed_stage: optimization
-  # 回放池patch重建开关：true时仅存坐标元数据，sample时重建patch
-  reconstruct_patch_on_sample: true
-  # 地图缓存张量化并驻留GPU（配合patch重建）
-  cache_maps_on_gpu: true
+  # [本地vs服务器区别] 回放池patch重建开关
+  # - 服务器提速试跑：设为 false，避免 sample 阶段大量 patch 重建开销
+  # - 本地内存敏感场景：可设为 true，用算力换显存
+  reconstruct_patch_on_sample: false
+  # [本地vs服务器区别] 地图缓存是否驻留GPU
+  # - reconstruct_patch_on_sample=false 时建议设为 false，避免无效显存驻留
+  # - reconstruct_patch_on_sample=true 时建议设为 true，减少采样重建的数据搬运
+  cache_maps_on_gpu: false
   # [目标先验图缓存限制] 保守档中可降低至 16-32 以进一步节省显存
   goal_prior_cache_size: 32
   patch_small: 11

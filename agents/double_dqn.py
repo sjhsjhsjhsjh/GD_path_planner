@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from typing import Dict
 
 import numpy as np
@@ -91,14 +92,16 @@ class DoubleDQNAgent:
         if np.random.rand() < float(epsilon):
             return int(np.random.randint(0, self.action_dim))
 
+        amp_ctx = autocast(dtype=torch.float16) if self.use_amp else nullcontext()
         with torch.no_grad():
-            t_state = self._to_tensor_state(state)
-            q = self.online(
-                t_state["scalar"],
-                t_state["patch_s"],
-                t_state["patch_l"],
-                t_state["action_feat"],
-            )
+            with amp_ctx:
+                t_state = self._to_tensor_state(state)
+                q = self.online(
+                    t_state["scalar"],
+                    t_state["patch_s"],
+                    t_state["patch_l"],
+                    t_state["action_feat"],
+                )
             return int(torch.argmax(q, dim=1).item())
 
     def train_step(self, batch: Dict, grad_clip: float = 10.0):
@@ -118,45 +121,46 @@ class DoubleDQNAgent:
         gamma_pow = self._batch_tensor(batch["gamma_pow"], torch.float32).view(-1, 1)
         weights = self._batch_tensor(batch["weights"], torch.float32).view(-1, 1)
 
-        q = self.online(scalar, patch_s, patch_l, action_feat).gather(1, action)
+        amp_ctx = autocast(dtype=torch.float16) if self.use_amp else nullcontext()
+        with amp_ctx:
+            q = self.online(scalar, patch_s, patch_l, action_feat).gather(1, action)
 
-        with torch.no_grad():
-            next_online_q = self.online(
-                next_scalar,
-                next_patch_s,
-                next_patch_l,
-                next_action_feat,
-            )
-            next_actions = torch.argmax(next_online_q, dim=1, keepdim=True)
-            next_target_q = self.target(
-                next_scalar,
-                next_patch_s,
-                next_patch_l,
-                next_action_feat,
-            ).gather(1, next_actions)
+            with torch.no_grad():
+                next_online_q = self.online(
+                    next_scalar,
+                    next_patch_s,
+                    next_patch_l,
+                    next_action_feat,
+                )
+                next_actions = torch.argmax(next_online_q, dim=1, keepdim=True)
+                next_target_q = self.target(
+                    next_scalar,
+                    next_patch_s,
+                    next_patch_l,
+                    next_action_feat,
+                ).gather(1, next_actions)
 
-            target = reward + (1.0 - done) * gamma_pow * next_target_q
+                target = reward + (1.0 - done) * gamma_pow * next_target_q
 
-        td_error = (target - q).detach().squeeze(1)
-
-        # [性能优化] 用 autocast 包裹 loss 计算
-        with autocast(
-            enabled=self.use_amp, dtype=torch.float16 if self.use_amp else torch.float32
-        ):
             loss_per_item = F.smooth_l1_loss(q, target, reduction="none")
             loss = (weights * loss_per_item).mean()
 
-        self.optimizer.zero_grad()
+        td_error = (target.float() - q.float()).detach().squeeze(1)
 
-        # [性能优化] 用 GradScaler 包裹梯度更新
-        self.scaler.scale(loss).backward()
-        self.scaler.unscale_(self.optimizer)
+        self.optimizer.zero_grad(set_to_none=True)
 
-        if grad_clip is not None and grad_clip > 0:
-            torch.nn.utils.clip_grad_norm_(self.online.parameters(), grad_clip)
-
-        self.scaler.step(self.optimizer)
-        self.scaler.update()  # [性能优化] GradScaler 更新
+        if self.use_amp:
+            self.scaler.scale(loss).backward()
+            self.scaler.unscale_(self.optimizer)
+            if grad_clip is not None and grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(self.online.parameters(), grad_clip)
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+        else:
+            loss.backward()
+            if grad_clip is not None and grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(self.online.parameters(), grad_clip)
+            self.optimizer.step()
 
         self.soft_update()
 
