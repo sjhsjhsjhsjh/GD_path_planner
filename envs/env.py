@@ -107,6 +107,8 @@ class Env:
         # [性能优化] 目标先验图按episode缓存成员
         self.cached_goal_prior = None
         self.cached_goal_prior_params = None
+        self.goal_distance_library = None
+        self.goal_prior_library_cache = {}
         reward_cfg = cfg.get("reward", {}) if hasattr(cfg, "get") else {}
         self.step_penalty_value = -float(reward_cfg.get("step_penalty", 0.02))
         self.out_of_bounds_penalty = -float(
@@ -263,7 +265,42 @@ class Env:
         self.beacon_number_array = self.beacon_number_map
 
         self.generate_terrain_reward_map()
+        if bool(self.cfg.dqn.get("use_precomputed_goal_prior", False)):
+            self._build_goal_distance_library()
         self._maps_loaded = True
+
+    def _build_goal_distance_library(self):
+        width = int(self.map_width)
+        height = int(self.map_height)
+        xs = np.arange(width, dtype=np.float32).reshape(-1, 1)
+        ys = np.arange(height, dtype=np.float32).reshape(1, -1)
+
+        library = {}
+        for gx in range(width):
+            for gy in range(height):
+                dist = np.abs(xs - np.float32(gx)) + np.abs(ys - np.float32(gy))
+                library[(gx, gy)] = dist.astype(np.float32)
+
+        self.goal_distance_library = library
+        self.goal_prior_library_cache = {}
+
+    def _get_goal_prior_precomputed(self, gx: int, gy: int, denom: int):
+        if self.goal_distance_library is None:
+            return None
+
+        key = (int(gx), int(gy), int(denom))
+        cached = self.goal_prior_library_cache.get(key)
+        if cached is not None:
+            return cached
+
+        dist = self.goal_distance_library.get((int(gx), int(gy)))
+        if dist is None:
+            return None
+
+        scale = max(1.0, float(denom))
+        prior = np.exp(-dist / scale).astype(np.float32)
+        self.goal_prior_library_cache[key] = prior
+        return prior
 
     def get_observation_cache(self):
         return {
@@ -272,6 +309,7 @@ class Env:
             "v_norm": self.v_norm,
             "beacon": self.beacon_array,
             "depth_reward": self.depth_reward_map,
+            "goal_distance_library": self.goal_distance_library,
         }
 
     def reset(self):
@@ -306,6 +344,9 @@ class Env:
         self.robot.INS_error = 0
         self.generate_goal_Gauss_heatmap(10.0)
 
+        # 先加载静态地图与预计算库，确保本轮可直接复用 goal_prior 预计算结果
+        self._load_static_maps()
+
         # [性能优化] 如果启用了goal_prior缓存，则该一次性计算并存储
         if self.cfg.dqn.get("cache_goal_prior", True):
             width = int(self.map_width)
@@ -314,12 +355,20 @@ class Env:
             gy = int(self.goal_y)
             denom = int(self.step_total)
 
-            # 快速计算 goal_prior（维持在 CPU 上，需要时再传到GPU）
-            xs = np.arange(width, dtype=np.float32).reshape(-1, 1)
-            ys = np.arange(height, dtype=np.float32).reshape(1, -1)
-            dist = (np.abs(xs - float(gx)) + np.abs(ys - float(gy))).astype(np.float32)
-            scale = max(1.0, float(denom))
-            self.cached_goal_prior = np.exp(-dist / scale).astype(np.float32)
+            precomputed_prior = None
+            if bool(self.cfg.dqn.get("use_precomputed_goal_prior", False)):
+                precomputed_prior = self._get_goal_prior_precomputed(gx, gy, denom)
+
+            if precomputed_prior is not None:
+                self.cached_goal_prior = precomputed_prior
+            else:
+                xs = np.arange(width, dtype=np.float32).reshape(-1, 1)
+                ys = np.arange(height, dtype=np.float32).reshape(1, -1)
+                dist = (np.abs(xs - float(gx)) + np.abs(ys - float(gy))).astype(
+                    np.float32
+                )
+                scale = max(1.0, float(denom))
+                self.cached_goal_prior = np.exp(-dist / scale).astype(np.float32)
             self.cached_goal_prior_params = (gx, gy, denom)
         else:
             self.cached_goal_prior = None
@@ -327,8 +376,6 @@ class Env:
         # 设置靠近目标奖励相关
         self.靠近目标奖励单步系数 = 1 / self.step_total
         self.远离目标奖励单步系数 = 1 / self.step_total * 1.5
-
-        self._load_static_maps()
 
         # 设置地形奖励相关
         平均水深期望 = self.计算区域平均水深期望(

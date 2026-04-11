@@ -21,6 +21,9 @@ class PrioritizedNStepReplayBufferGPU:
         reconstruct_patch_on_sample: bool = False,
         cache_maps_on_gpu: bool = True,
         goal_prior_cache_size: int = 64,
+        replay_store_mode: str = "full_patch",
+        replay_dtype: str = "float32",
+        use_batch_patch_indexing: bool = True,
     ):
         self.capacity = int(capacity)
         self.alpha = float(alpha)
@@ -32,9 +35,27 @@ class PrioritizedNStepReplayBufferGPU:
         self.reconstruct_patch_on_sample = bool(reconstruct_patch_on_sample)
         self.cache_maps_on_gpu = bool(cache_maps_on_gpu)
         self.goal_prior_cache_size = max(1, int(goal_prior_cache_size))
-        if self.reconstruct_patch_on_sample and not self.cache_maps_on_gpu:
+
+        mode = str(replay_store_mode).strip().lower()
+        if mode not in {"full_patch", "meta_only"}:
+            raise ValueError("replay_store_mode must be one of: full_patch, meta_only")
+        self.replay_store_mode = mode
+        self.meta_only = self.replay_store_mode == "meta_only"
+        self.use_batch_patch_indexing = bool(use_batch_patch_indexing)
+
+        dtype_name = str(replay_dtype).strip().lower()
+        if dtype_name in {"float16", "fp16", "half"}:
+            self.replay_dtype = torch.float16
+        elif dtype_name in {"float32", "fp32"}:
+            self.replay_dtype = torch.float32
+        else:
+            raise ValueError("replay_dtype must be float16 or float32")
+
+        if (
+            self.reconstruct_patch_on_sample or self.meta_only
+        ) and not self.cache_maps_on_gpu:
             raise ValueError(
-                "Patch reconstruction currently requires cache_maps_on_gpu=True."
+                "Patch reconstruction/meta-only mode requires cache_maps_on_gpu=True."
             )
 
         self.storage: List[Dict] = []
@@ -55,9 +76,9 @@ class PrioritizedNStepReplayBufferGPU:
 
     def _to_device_2d_float(self, value) -> torch.Tensor:
         if torch.is_tensor(value):
-            tensor = value.to(device=self.device, dtype=torch.float32)
+            tensor = value.to(device=self.device, dtype=self.replay_dtype)
         else:
-            tensor = torch.as_tensor(value, dtype=torch.float32, device=self.device)
+            tensor = torch.as_tensor(value, dtype=self.replay_dtype, device=self.device)
         return tensor
 
     def _init_map_cache(
@@ -65,7 +86,7 @@ class PrioritizedNStepReplayBufferGPU:
     ) -> Dict[str, torch.Tensor]:
         if observation_cache is None:
             return {}
-        if not self.reconstruct_patch_on_sample:
+        if not (self.reconstruct_patch_on_sample or self.meta_only):
             return {}
 
         terrain = self._to_device_2d_float(observation_cache["terrain"])
@@ -73,15 +94,47 @@ class PrioritizedNStepReplayBufferGPU:
         v_norm = self._to_device_2d_float(observation_cache["v_norm"])
         beacon = self._to_device_2d_float(observation_cache["beacon"])
         depth_reward = self._to_device_2d_float(observation_cache["depth_reward"])
+        goal_distance_library = observation_cache.get("goal_distance_library")
+        goal_distance_bank = self._build_goal_distance_bank(
+            goal_distance_library,
+            width=int(terrain.shape[0]),
+            height=int(terrain.shape[1]),
+        )
         return {
             "terrain": terrain,
             "u_norm": u_norm,
             "v_norm": v_norm,
             "beacon": beacon,
             "depth_reward": depth_reward,
+            "goal_distance_bank": goal_distance_bank,
             "width": int(terrain.shape[0]),
             "height": int(terrain.shape[1]),
         }
+
+    def _build_goal_distance_bank(
+        self, goal_distance_library, width: int, height: int
+    ) -> Optional[torch.Tensor]:
+        if goal_distance_library is None:
+            return None
+
+        if torch.is_tensor(goal_distance_library):
+            return goal_distance_library.to(device=self.device, dtype=self.replay_dtype)
+
+        if isinstance(goal_distance_library, dict):
+            bank = []
+            for gx in range(width):
+                for gy in range(height):
+                    dist = goal_distance_library.get((gx, gy))
+                    if dist is None:
+                        raise KeyError(f"goal_distance_library 缺少键 {(gx, gy)}")
+                    bank.append(
+                        torch.as_tensor(
+                            dist, dtype=self.replay_dtype, device=self.device
+                        )
+                    )
+            return torch.stack(bank, dim=0)
+
+        return None
 
     def _extract_patch(
         self, arr: torch.Tensor, cx: int, cy: int, size: int
@@ -123,6 +176,105 @@ class PrioritizedNStepReplayBufferGPU:
             self.goal_prior_cache.popitem(last=False)
         return prior
 
+    def _goal_prior_batch_from_meta(
+        self,
+        goal_x: torch.Tensor,
+        goal_y: torch.Tensor,
+        step_total: torch.Tensor,
+        center_x: torch.Tensor,
+        center_y: torch.Tensor,
+        size: int,
+    ) -> torch.Tensor:
+        if self.map_cache.get("goal_distance_bank") is None:
+            priors = []
+            batch_size = int(goal_x.shape[0])
+            for idx in range(batch_size):
+                prior = self._goal_prior_map(
+                    width=int(self.map_cache["width"]),
+                    height=int(self.map_cache["height"]),
+                    gx=int(goal_x[idx].item()),
+                    gy=int(goal_y[idx].item()),
+                    denom=int(step_total[idx].item()),
+                )
+                priors.append(prior)
+            prior_maps = torch.stack(priors, dim=0)
+        else:
+            bank = self.map_cache["goal_distance_bank"]
+            height = int(self.map_cache["height"])
+            goal_idx = (goal_x.to(torch.int64) * height + goal_y.to(torch.int64)).view(
+                -1
+            )
+            dist_maps = bank.index_select(0, goal_idx)
+            denom = step_total.to(dtype=self.replay_dtype).clamp_min(1.0).view(-1, 1, 1)
+            prior_maps = torch.exp(-(dist_maps.to(dtype=self.replay_dtype) / denom))
+
+        return self._extract_patch_batch_from_maps(prior_maps, center_x, center_y, size)
+
+    def _extract_patch_batch_from_maps(
+        self,
+        maps: torch.Tensor,
+        center_x: torch.Tensor,
+        center_y: torch.Tensor,
+        size: int,
+    ) -> torch.Tensor:
+        batch_size = int(center_x.shape[0])
+        half = size // 2
+        offsets = torch.arange(-half, half + 1, device=self.device, dtype=torch.int64)
+
+        if maps.dim() == 2:
+            maps = maps.unsqueeze(0).expand(batch_size, -1, -1)
+        elif maps.dim() == 3 and maps.shape[0] != batch_size:
+            raise ValueError("Batch map shape mismatch during patch extraction.")
+
+        x_idx = center_x.to(device=self.device, dtype=torch.int64).view(
+            batch_size, 1, 1
+        )
+        y_idx = center_y.to(device=self.device, dtype=torch.int64).view(
+            batch_size, 1, 1
+        )
+        x_idx = (x_idx + offsets.view(1, -1, 1)).clamp(0, maps.shape[-2] - 1)
+        y_idx = (y_idx + offsets.view(1, 1, -1)).clamp(0, maps.shape[-1] - 1)
+        batch_idx = torch.arange(
+            batch_size, device=self.device, dtype=torch.int64
+        ).view(batch_size, 1, 1)
+        return maps[batch_idx, x_idx, y_idx]
+
+    def _build_patch_batch_from_meta(
+        self, samples: List[Dict], key_state: str, size: int
+    ) -> torch.Tensor:
+        metas = torch.stack([s[key_state]["patch_meta"] for s in samples], dim=0)
+        center_x = metas[:, 0]
+        center_y = metas[:, 1]
+        goal_x = metas[:, 2]
+        goal_y = metas[:, 3]
+        step_total = metas[:, 4]
+
+        terrain = self.map_cache["terrain"]
+        u_norm = self.map_cache["u_norm"]
+        v_norm = self.map_cache["v_norm"]
+        beacon = self.map_cache["beacon"]
+
+        terrain_patch = self._extract_patch_batch_from_maps(
+            terrain, center_x, center_y, size
+        )
+        u_patch = self._extract_patch_batch_from_maps(u_norm, center_x, center_y, size)
+        v_patch = self._extract_patch_batch_from_maps(v_norm, center_x, center_y, size)
+        beacon_patch = self._extract_patch_batch_from_maps(
+            beacon, center_x, center_y, size
+        )
+        goal_patch = self._goal_prior_batch_from_meta(
+            goal_x=goal_x,
+            goal_y=goal_y,
+            step_total=step_total,
+            center_x=center_x,
+            center_y=center_y,
+            size=size,
+        )
+        return torch.stack(
+            [terrain_patch, u_patch, v_patch, beacon_patch, goal_patch],
+            dim=1,
+        )
+
     def _build_patch(self, meta: torch.Tensor, size: int) -> torch.Tensor:
         x = int(meta[0].item())
         y = int(meta[1].item())
@@ -155,15 +307,24 @@ class PrioritizedNStepReplayBufferGPU:
     def _build_patch_batch(
         self, samples: List[Dict], key_state: str, size: int
     ) -> torch.Tensor:
+        if self.use_batch_patch_indexing:
+            return self._build_patch_batch_from_meta(samples, key_state, size)
+
         patches = [self._build_patch(s[key_state]["patch_meta"], size) for s in samples]
         return torch.stack(patches, dim=0)
 
     def _clone_state(self, state: Dict) -> Dict[str, torch.Tensor]:
         cloned = {
-            "scalar": state["scalar"].detach().to(self.device).clone(),
-            "action_feat": state["action_feat"].detach().to(self.device).clone(),
+            "scalar": state["scalar"]
+            .detach()
+            .to(self.device, dtype=self.replay_dtype)
+            .clone(),
+            "action_feat": state["action_feat"]
+            .detach()
+            .to(self.device, dtype=self.replay_dtype)
+            .clone(),
         }
-        if self.reconstruct_patch_on_sample:
+        if self.reconstruct_patch_on_sample or self.meta_only:
             if "patch_meta" not in state:
                 raise KeyError(
                     "State is missing `patch_meta` required for patch reconstruction."
@@ -172,8 +333,18 @@ class PrioritizedNStepReplayBufferGPU:
                 state["patch_meta"].detach().to(self.device, dtype=torch.int32).clone()
             )
         else:
-            cloned["patch_s"] = state["patch_s"].detach().to(self.device).clone()
-            cloned["patch_l"] = state["patch_l"].detach().to(self.device).clone()
+            cloned["patch_s"] = (
+                state["patch_s"]
+                .detach()
+                .to(self.device, dtype=self.replay_dtype)
+                .clone()
+            )
+            cloned["patch_l"] = (
+                state["patch_l"]
+                .detach()
+                .to(self.device, dtype=self.replay_dtype)
+                .clone()
+            )
         return cloned
 
     def _build_nstep_transition(self):
@@ -256,7 +427,7 @@ class PrioritizedNStepReplayBufferGPU:
         weights = torch.pow(size * probs[indices] + 1e-8, -float(beta))
         weights = weights / (weights.max() + 1e-8)
 
-        if self.reconstruct_patch_on_sample:
+        if self.reconstruct_patch_on_sample or self.meta_only:
             if not self.map_cache:
                 raise RuntimeError(
                     "Patch reconstruction is enabled but map cache is empty."
@@ -281,16 +452,16 @@ class PrioritizedNStepReplayBufferGPU:
 
         batch = {
             "state_scalar": torch.stack([s["state"]["scalar"] for s in samples], dim=0),
-            "state_patch_s": state_patch_s,
-            "state_patch_l": state_patch_l,
+            "state_patch_s": state_patch_s.to(dtype=self.replay_dtype),
+            "state_patch_l": state_patch_l.to(dtype=self.replay_dtype),
             "state_action_feat": torch.stack(
                 [s["state"]["action_feat"] for s in samples], dim=0
             ),
             "next_scalar": torch.stack(
                 [s["next_state"]["scalar"] for s in samples], dim=0
             ),
-            "next_patch_s": next_patch_s,
-            "next_patch_l": next_patch_l,
+            "next_patch_s": next_patch_s.to(dtype=self.replay_dtype),
+            "next_patch_l": next_patch_l.to(dtype=self.replay_dtype),
             "next_action_feat": torch.stack(
                 [s["next_state"]["action_feat"] for s in samples], dim=0
             ),
@@ -343,7 +514,7 @@ class PrioritizedNStepReplayBufferGPU:
         out = {}
         for key, value in state.items():
             if torch.is_tensor(value):
-                dtype = torch.int32 if key == "patch_meta" else torch.float32
+                dtype = torch.int32 if key == "patch_meta" else self.replay_dtype
                 out[key] = value.to(device=self.device, dtype=dtype)
             else:
                 out[key] = value
@@ -358,6 +529,11 @@ class PrioritizedNStepReplayBufferGPU:
             "patch_small": int(self.patch_small),
             "patch_large": int(self.patch_large),
             "reconstruct_patch_on_sample": bool(self.reconstruct_patch_on_sample),
+            "replay_store_mode": str(self.replay_store_mode),
+            "replay_dtype": (
+                "float16" if self.replay_dtype == torch.float16 else "float32"
+            ),
+            "use_batch_patch_indexing": bool(self.use_batch_patch_indexing),
             "cache_maps_on_gpu": bool(self.cache_maps_on_gpu),
             "goal_prior_cache_size": int(self.goal_prior_cache_size),
             "pos": int(self.pos),

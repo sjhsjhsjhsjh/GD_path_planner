@@ -274,6 +274,9 @@ def train_double_dqn_with_cfg(
     )
     cache_maps_on_gpu = bool(dqn_cfg.get("cache_maps_on_gpu", True))
     goal_prior_cache_size = int(dqn_cfg.get("goal_prior_cache_size", 64))
+    replay_store_mode = str(dqn_cfg.get("replay_store_mode", "full_patch"))
+    replay_dtype = str(dqn_cfg.get("replay_dtype", "float32"))
+    use_batch_patch_indexing = bool(dqn_cfg.get("use_batch_patch_indexing", True))
 
     obs = env.reset()
     first_state = encode_observation(env, obs, small=patch_small, large=patch_large)
@@ -334,6 +337,9 @@ def train_double_dqn_with_cfg(
         reconstruct_patch_on_sample=reconstruct_patch_on_sample,
         cache_maps_on_gpu=cache_maps_on_gpu,
         goal_prior_cache_size=goal_prior_cache_size,
+        replay_store_mode=replay_store_mode,
+        replay_dtype=replay_dtype,
+        use_batch_patch_indexing=use_batch_patch_indexing,
     )
 
     batch_size = int(cfg.train.batch_size)
