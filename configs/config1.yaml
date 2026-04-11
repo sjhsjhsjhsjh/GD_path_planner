@@ -58,7 +58,7 @@ stage:
   ep_phase2_ratio: 0.6
 
 buffer:
-  capacity: 500000
+  capacity: 2000000
   # capacity: 500000
 
 train:
