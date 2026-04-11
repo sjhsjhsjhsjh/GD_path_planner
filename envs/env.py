@@ -102,7 +102,11 @@ class Env:
         self.run_dir = resolved_run_dir
         self.console = console
         self.step_rewards_filename = "step_rewards.csv"
+        # [性能优化] 日志开关 - 服务器训练应设为false，本地验证可设为true
         self.enable_step_logging = True
+        # [性能优化] 目标先验图按episode缓存成员
+        self.cached_goal_prior = None
+        self.cached_goal_prior_params = None
         reward_cfg = cfg.get("reward", {}) if hasattr(cfg, "get") else {}
         self.step_penalty_value = -float(reward_cfg.get("step_penalty", 0.02))
         self.out_of_bounds_penalty = -float(
@@ -301,6 +305,24 @@ class Env:
         self.robot = Robot(self.now_init_energy, (self.start_x, self.start_y))
         self.robot.INS_error = 0
         self.generate_goal_Gauss_heatmap(10.0)
+
+        # [性能优化] 如果启用了goal_prior缓存，则该一次性计算并存储
+        if self.cfg.dqn.get("cache_goal_prior", True):
+            width = int(self.map_width)
+            height = int(self.map_height)
+            gx = int(self.goal_x)
+            gy = int(self.goal_y)
+            denom = int(self.step_total)
+
+            # 快速计算 goal_prior（维持在 CPU 上，需要时再传到GPU）
+            xs = np.arange(width, dtype=np.float32).reshape(-1, 1)
+            ys = np.arange(height, dtype=np.float32).reshape(1, -1)
+            dist = (np.abs(xs - float(gx)) + np.abs(ys - float(gy))).astype(np.float32)
+            scale = max(1.0, float(denom))
+            self.cached_goal_prior = np.exp(-dist / scale).astype(np.float32)
+            self.cached_goal_prior_params = (gx, gy, denom)
+        else:
+            self.cached_goal_prior = None
 
         # 设置靠近目标奖励相关
         self.靠近目标奖励单步系数 = 1 / self.step_total

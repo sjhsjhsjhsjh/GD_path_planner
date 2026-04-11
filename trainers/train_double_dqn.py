@@ -161,7 +161,14 @@ def encode_observation(
     u_arr = cache["u_norm"]
     v_arr = cache["v_norm"]
     beacon = cache["beacon"]
-    goal_prior = _goal_prior_map(width, height, env.goal_x, env.goal_y, env.step_total)
+
+    # [性能优化] 使用缓存的 goal_prior，或回退到原逐步计算
+    if env.cached_goal_prior is not None:
+        goal_prior = env.cached_goal_prior
+    else:
+        goal_prior = _goal_prior_map(
+            width, height, env.goal_x, env.goal_y, env.step_total
+        )
 
     def build_patch(size):
         return np.stack(
@@ -244,6 +251,9 @@ def train_double_dqn_with_cfg(
 
     env = Env(cfg, run_dir=out_dir, console=console)
 
+    # [性能优化] 下发日志开关与缓存策略
+    env.enable_step_logging = bool(cfg.env.get("enable_step_logging", True))
+
     dqn_cfg = cfg.get("dqn", {}) if hasattr(cfg, "get") else {}
     use_stage_schedule = bool(dqn_cfg.get("use_stage_schedule", False))
     stage_name = str(dqn_cfg.get("fixed_stage", "optimization"))
@@ -303,6 +313,8 @@ def train_double_dqn_with_cfg(
         tau=float(dqn_cfg.get("tau", 0.005)),
         hidden_dim=int(dqn_cfg.get("hidden_dim", 128)),
         device=device,
+        # [性能优化] AMP 开关
+        use_amp=bool(dqn_cfg.get("use_amp", False)),
     )
 
     reward_cfg = cfg.get("reward", {}) if hasattr(cfg, "get") else {}

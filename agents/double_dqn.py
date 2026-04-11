@@ -3,6 +3,7 @@ from typing import Dict
 import numpy as np
 import torch
 import torch.nn.functional as F
+from torch.cuda.amp import autocast, GradScaler  # [性能优化] AMP 导入
 
 from models.dqn_model import MultiScaleDuelingQNetwork
 
@@ -19,6 +20,7 @@ class DoubleDQNAgent:
         tau: float,
         hidden_dim: int = 128,
         device: str = "cpu",
+        use_amp: bool = False,  # [性能优化] AMP 开关
     ):
         self.action_dim = int(action_dim)
         self.gamma = float(gamma)
@@ -43,6 +45,10 @@ class DoubleDQNAgent:
         self.target.eval()
 
         self.optimizer = torch.optim.Adam(self.online.parameters(), lr=lr)
+
+        # [性能优化] AMP 初始化
+        self.use_amp = bool(use_amp)
+        self.scaler = GradScaler(enabled=self.use_amp)
 
     def state_to_device(self, state: Dict) -> Dict[str, torch.Tensor]:
         out = {}
@@ -132,14 +138,25 @@ class DoubleDQNAgent:
             target = reward + (1.0 - done) * gamma_pow * next_target_q
 
         td_error = (target - q).detach().squeeze(1)
-        loss_per_item = F.smooth_l1_loss(q, target, reduction="none")
-        loss = (weights * loss_per_item).mean()
+
+        # [性能优化] 用 autocast 包裹 loss 计算
+        with autocast(
+            enabled=self.use_amp, dtype=torch.float16 if self.use_amp else torch.float32
+        ):
+            loss_per_item = F.smooth_l1_loss(q, target, reduction="none")
+            loss = (weights * loss_per_item).mean()
 
         self.optimizer.zero_grad()
-        loss.backward()
+
+        # [性能优化] 用 GradScaler 包裹梯度更新
+        self.scaler.scale(loss).backward()
+        self.scaler.unscale_(self.optimizer)
+
         if grad_clip is not None and grad_clip > 0:
             torch.nn.utils.clip_grad_norm_(self.online.parameters(), grad_clip)
-        self.optimizer.step()
+
+        self.scaler.step(self.optimizer)
+        self.scaler.update()  # [性能优化] GradScaler 更新
 
         self.soft_update()
 

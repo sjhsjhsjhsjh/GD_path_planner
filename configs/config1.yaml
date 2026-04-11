@@ -9,6 +9,10 @@ env:
   ins_error_threshold: 15
   cannot_drive_depth: 0.5
   deep_depth_threshold: 0.13
+  # [本地vs服务器区别] 逐步奖励记录开关
+  # - 服务器训练时必须设为 false，节省 I/O 与显存（避免队列堆积）
+  # - 本地验证/排障时设为 true，生成 step_rewards.csv 明细用于分析
+  enable_step_logging: false
 
 runtime:
   # 服务器模式：true 时强制 matplotlib 使用 Agg 无头后端
@@ -58,8 +62,13 @@ stage:
   ep_phase2_ratio: 0.6
 
 buffer:
-  capacity: 2000000
-  # capacity: 500000
+  # [本地vs服务器重大区别] Replay buffer 容量
+  # 当前实现中 replay 以小图元张量 + 字典方式存储，容易产生碎片化
+  # - 服务器（30GB RAM + 单卡T4）：保守档推荐 500000-1000000
+  #   理论容量足够，但实现开销决定实际可行性
+  # - 本地开发/验证：可用 100000-200000 快速迭代
+  # 原值 12000000 在当前实现下不可运行（会导致OOM）
+  capacity: 700000
 
 train:
   # 主算法选择：q_learning / double_dqn
@@ -71,7 +80,10 @@ train:
   total_steps: 30000
   # algorithm: q_learning
   # total_steps: 50000
-  batch_size: 128
+  # [保守稳跑档] 单卡T4推荐 batch_size=256-512
+  # 较低值时 GPU利用率低；过高时容易OOM
+  # 当前值 256 需配合 capacity <= 1000000
+  batch_size: 256
   target_update: 1000
   eval_interval: 5000
   # Q-learning 专用配置
@@ -95,8 +107,8 @@ dqn:
   reconstruct_patch_on_sample: true
   # 地图缓存张量化并驻留GPU（配合patch重建）
   cache_maps_on_gpu: true
-  # 目标先验图缓存上限（按 goal_x/goal_y/step_total 进行缓存）
-  goal_prior_cache_size: 64
+  # [目标先验图缓存限制] 保守档中可降低至 16-32 以进一步节省显存
+  goal_prior_cache_size: 32
   patch_small: 11
   patch_large: 21
   hidden_dim: 128
@@ -106,9 +118,26 @@ dqn:
   per_beta_start: 0.4
   per_beta_end: 1.0
   warmup_steps: 2000
-  updates_per_step: 1
+  # [保守稳跑档] 每步 GPU 更新迭代数
+  # 值越大 GPU 被喂越满，但可能引发显存峰值
+  # 当前推荐 2-4，配合 batch_size=256-512 使用
+  updates_per_step: 2
   grad_clip: 10.0
   device: cuda
+  # [性能优化] 目标先验图按episode缓存
+  # - 当前实现每次 encode_observation 都重新计算 goal_prior
+  # - 开启后仅在 episode reset 时计算一次，编码阶段直接读取
+  # - 推荐始终开启（无副作用，能显著降低CPU开销）
+  # - false 时回退到原逐步计算逻辑（用于排障）
+  cache_goal_prior: true
+  # [性能优化] 混合精度训练开启
+  # - T4 GPU 对 FP16 Tensor Core 友好，可显著加速
+  # - 当前实现用 autocast + GradScaler 包裹 loss 计算
+  # - 开启时吞吐量通常 +30%-50%，显存占用 -30%-40%
+  # - 需在前1000步监控 loss 与梯度，防止数值不稳定
+  # - false 时使用标准 FP32 训练（稳定但较慢）
+  use_amp: true
+  amp_dtype: float16
 
 beacon:
   beacon_signal_area: 5
