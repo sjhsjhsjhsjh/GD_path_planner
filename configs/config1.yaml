@@ -58,8 +58,9 @@ reward:
 stage:
   # 固定三阶段调度（A方案）
   schedule_type: episode
-  ep_phase1_ratio: 0.2
-  ep_phase2_ratio: 0.6
+  # DQN 推荐 epsilon 曲线：前 5% 探索，中段 35% 平滑过渡，后段低位利用
+  ep_phase1_ratio: 0.05
+  ep_phase2_ratio: 0.40
 
 buffer:
   # [本地vs服务器重大区别] Replay buffer 容量
@@ -68,7 +69,7 @@ buffer:
   #   理论容量足够，但实现开销决定实际可行性
   # - 本地开发/验证：可用 100000-200000 快速迭代
   # 原值 12000000 在当前实现下不可运行（会导致OOM）
-  capacity: 700000
+  capacity: 550000
 
 train:
   # 主算法选择：q_learning / double_dqn
@@ -103,6 +104,14 @@ dqn:
   # 建议首轮先关闭阶段奖励调度，建立稳态基线
   use_stage_schedule: false
   fixed_stage: optimization
+  # [性能优化] DQN 专用 epsilon 曲线
+  # - 前 5% 轮次保持高探索
+  # - 5%~40% 轮次平滑下降到低位
+  # - 后续保持低随机性，兼顾收敛和局部修正
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_phase1_ratio: 0.05
+  epsilon_phase2_ratio: 0.40
   # [本地vs服务器区别] replay 存储模式
   # - meta_only: 仅存 scalar/action_feat/patch_meta，采样时按元数据重建 patch
   # - full_patch: 直接存完整 patch（显存占用更高）

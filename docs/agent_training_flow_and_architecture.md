@@ -254,6 +254,67 @@
 - `Env.reset()` 内部当前使用固定起终点（`(6,6) -> (43,43)`）覆盖了随机采样结果。
 - `runs.py` 每次启动会清理旧输出目录（保留最近 2 次），重要实验结果需提前备份。
 
+## 11. 近期已落实的性能与存储优化（2026-04-11）
+
+本节记录最近已经落到代码中的改动，便于后续 Agent 快速判断当前主路径与旧实现的关系。当前推荐的服务器训练路径已经从“逐样本重建 patch”切换为“元数据回放 + 预计算目标先验 + 批量索引重建”。
+
+### 11.1 AMP 覆盖修复
+
+- `agents/double_dqn.py` 的 `train_step()` 已接入 `autocast` 和 `GradScaler`。
+- 当前训练路径不再只把 loss 计算放进混合精度，而是把在线网络前向、目标网络前向、Q 值计算和 loss 计算统一纳入 AMP 作用域。
+- 反向传播顺序保持为 `scale -> backward -> unscale -> clip -> step -> update`，避免梯度裁剪作用在缩放梯度上。
+- `configs/config1.yaml` 中已保留 `dqn.use_amp: true` 作为默认训练开关。
+
+### 11.2 goal_prior 全量预计算
+
+- `envs/env.py` 已加入全量 `goal_prior` 库，按 `(goal_x, goal_y)` 预先缓存目标先验图。
+- `Env.reset()` 会优先使用预计算库，其次回退到 episode 级缓存，最后才走即时计算。
+- 这样可以避免每次 `encode_observation()` 和 replay 采样时重复重算目标先验图。
+- 当前文档里的“按 episode 缓存”只保留为回退逻辑，主路径已经升级为全量预计算。
+
+### 11.3 Replay 的 meta_only 存储模式
+
+- `buffers/prioritized_replay_gpu.py` 已支持 `replay_store_mode=meta_only`。
+- 在该模式下，transition 不再长期保存完整 `patch_s` / `patch_l`，而是保存用于重建 patch 的元数据。
+- 这些元数据至少包含位置、目标位置和步数上下文，供采样时按需恢复图块。
+- `replay_dtype` 也已接入，可在 `float16` 与 `float32` 间切换，当前服务器默认档倾向 `float16`。
+
+### 11.4 批量索引版 patch 重建
+
+- replay 采样已从逐样本 Python 循环重建，切换为 batch 级张量索引重建。
+- 现在 `sample()` 会按批次一次性恢复 `state_patch_s`、`state_patch_l`、`next_state_patch_s`、`next_state_patch_l`，减少大量小 kernel 启动和 Python 循环开销。
+- 静态图层 `terrain`、`u_norm`、`v_norm`、`beacon` 只保留单份缓存；`goal_prior` 则从预计算库按目标索引读取。
+- 这条路径是当前单卡 T4 上的主推荐路径，目的是降低显存增长斜率并提高采样吞吐。
+
+### 11.5 配置默认档与兼容性
+
+- `configs/config1.yaml` 已接入并保留与上述优化相关的开关：`enable_step_logging`、`cache_goal_prior`、`use_precomputed_goal_prior`、`replay_store_mode`、`replay_dtype`、`use_batch_patch_indexing`、`use_amp`。
+- 服务器训练默认建议是 `meta_only + precomputed_goal_prior + float16 + batch indexing + AMP`。
+- 旧的 `full_patch` / `reconstruct` 路径仍作为回退方案保留，便于排障和对照实验。
+- `trainers/train_double_dqn.py` 负责把这些开关透传给环境和 replay buffer，训练主循环本身不需要感知具体存储细节。
+
+### 11.6 DQN epsilon 曲线优化（2026-04-11 新增）
+
+- DQN 的 epsilon 探索策略已从原来的硬编码三段式改为更灵活的配置驱动方式。
+- 当前实现在 [trainers/train_double_dqn.py](trainers/train_double_dqn.py#L39) 的 `three_stage_epsilon` 函数中，优先从 `dqn.*` 配置段读取 epsilon 参数，回退到 `agent.*` 段。
+- **推荐参数档位**：
+  - `dqn.epsilon_start: 1.0`（初始探索率）
+  - `dqn.epsilon_end: 0.05`（最终利用率）
+  - `dqn.epsilon_phase1_ratio: 0.05`（前 5% episodes 保持高探索）
+  - `dqn.epsilon_phase2_ratio: 0.40`（5% 到 40% episodes 平滑线性下降）
+  - `40%` 之后保持低随机性，驱动收敛和局部微调
+- 这套参数相比原来的 0.2/0.6 比例更激进，因为多约束路径规划任务中盲目尝试效率低，早期尽快进入学习区间更有利。
+- 如果需要更保守，可调整：
+  - `epsilon_phase1_ratio: 0.10`，`epsilon_phase2_ratio: 0.50`
+  - `epsilon_end: 0.03` 或 `0.02`（更低位置利用）
+
+### 11.7 给后续 Agent 的判断规则
+
+- 如果目标是继续压缩显存，优先看 `buffers/prioritized_replay_gpu.py` 的存储模式与采样路径，而不是先调大 capacity。
+- 如果目标是提高 GPU 利用率，优先看 batch 索引重建和 AMP 覆盖范围，而不是先加大 `updates_per_step`。
+- 如果目标是调试观测输入，优先看 `trainers/train_double_dqn.py` 的 `encode_observation()`，再看 `envs/env.py` 的 `goal_prior` 生成逻辑。
+- 如果目标是调整探索与利用的平衡，优先改 `dqn.epsilon_*` 相关参数，而不是改 buffer 容量或 batch size。
+
 ---
 
 若后续 Agent 需要在此文档基础上继续扩展，建议保持“入口编排 -> 环境机制 -> 算法分支 -> 输出分析”的叙述顺序，便于快速定位改动影响范围。

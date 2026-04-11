@@ -38,8 +38,13 @@ def make_output_dir(base="outputs"):
 
 def three_stage_epsilon(cfg, eps_start, eps_end, total_episodes, episode_idx):
     stage_cfg = cfg.get("stage", {}) if hasattr(cfg, "get") else {}
-    p1 = float(stage_cfg.get("ep_phase1_ratio", 0.2))
-    p2 = float(stage_cfg.get("ep_phase2_ratio", 0.6))
+    dqn_cfg = cfg.get("dqn", {}) if hasattr(cfg, "get") else {}
+    p1 = float(
+        dqn_cfg.get("epsilon_phase1_ratio", stage_cfg.get("ep_phase1_ratio", 0.2))
+    )
+    p2 = float(
+        dqn_cfg.get("epsilon_phase2_ratio", stage_cfg.get("ep_phase2_ratio", 0.6))
+    )
     p1 = max(0.0, min(1.0, p1))
     p2 = max(p1, min(1.0, p2))
 
@@ -264,8 +269,8 @@ def train_double_dqn_with_cfg(
     max_steps = int(cfg.train.max_steps_per_episode)
     action_dim = int(cfg.env.action_dim)
 
-    eps_start = float(cfg.agent.get("epsilon_start", 1.0))
-    eps_end = float(cfg.agent.get("epsilon_end", 0.01))
+    eps_start = float(dqn_cfg.get("epsilon_start", cfg.agent.get("epsilon_start", 1.0)))
+    eps_end = float(dqn_cfg.get("epsilon_end", cfg.agent.get("epsilon_end", 0.01)))
 
     patch_small = int(dqn_cfg.get("patch_small", 11))
     patch_large = int(dqn_cfg.get("patch_large", 21))
