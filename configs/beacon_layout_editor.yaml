@@ -1,0 +1,9 @@
+editor:
+  base_config_path: configs/config1.yaml
+  output_beacon_config_path: configs/beacons/default_beacons.json
+  terrain_run_dir: outputs/sanity_check
+  rows: 50
+  cols: 50
+  default_radius: 5
+  nearby_display_count: 5
+  nearby_gap_limit: 20

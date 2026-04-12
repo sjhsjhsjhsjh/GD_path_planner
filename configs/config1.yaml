@@ -6,7 +6,26 @@ env:
   action_dim: 4
   # 使用坐标+目标向量+惯导误差作为观测（x,y,dx,dy,ins_error）
   obs_dim: 5
+  # INS 误差终止阈值基线：当关闭动态阈值时直接使用该值；
+  # 开启动态阈值时作为 default 值与上限裁剪参考。
   ins_error_threshold: 15
+  # 是否按“起终点+信标分布”动态计算每个 episode 的 INS 阈值。
+  dynamic_ins_error_threshold: true
+  # 动态阈值中的“路径走廊半宽”（单位：网格）：
+  # 信标到起终点连线的距离 <= corridor_width + beacon_radius 才参与计算。
+  dynamic_ins_corridor_width: 4
+  # 动态阈值安全系数：
+  # raw_threshold = ceil(max_gap_steps * dynamic_ins_safety_factor)
+  # 值越大阈值越宽松，值越小越严格。
+  dynamic_ins_safety_factor: 0.7
+  # 动态阈值下限（最终阈值会被裁剪到 [dynamic_ins_min, dynamic_ins_max] 区间）。
+  dynamic_ins_min: 4
+  # 动态阈值上限（最终阈值会被裁剪到 [dynamic_ins_min, dynamic_ins_max] 区间）。
+  dynamic_ins_max: 14
+  init_energy_scale: 1.5
+  init_energy_short_scale: 2.0
+  init_energy_short_step_threshold: 20
+  init_energy_min: 20
   cannot_drive_depth: 0.5
   deep_depth_threshold: 0.13
   # [本地vs服务器区别] 逐步奖励记录开关
@@ -16,7 +35,19 @@ env:
 
 runtime:
   # 服务器模式：true 时强制 matplotlib 使用 Agg 无头后端
-  server_mode: false
+  server_mode: true
+
+logging:
+  # 是否写入 step_rewards.csv（逐步日志）；server 长训建议关闭以降低 I/O
+  # - null: 自动策略（server_mode=true 时关闭，其他情况跟随 env.enable_step_logging）
+  # - true/false: 显式覆盖自动策略
+  enable_step_logging: null
+  # 是否启用 episode 级奖励分量累计与写入 train_log.csv
+  enable_episode_component_logging: true
+  # episode 分量占比口径：
+  # - abs_total: 按各分量绝对值占比（推荐，避免正负抵消）
+  # - positive_total: 仅按正向分量占比
+  episode_ratio_base: abs_total
   
 
 agent:
@@ -32,6 +63,16 @@ agent:
 reward:
   # 从“单目标靠近”过渡到“多目标平衡”（靠近、地形、海流、电量）
   step_penalty: 0.06
+  # 步惩罚模式：
+  # - fixed: 旧逻辑，按固定值逐步惩罚
+  # - normalized_with_overtime: 新逻辑，基础惩罚按 step_total 归一化，并在超步后线性加重
+  step_penalty_mode: normalized_with_overtime
+  # normalized_with_overtime 模式：基础归一化惩罚系数（每步基础项约为 -base_scale / step_total）
+  step_penalty_base_scale: 1.2
+  # normalized_with_overtime 模式：超步惩罚系数（超出阈值后按超出比例线性增加）
+  step_penalty_overtime_scale: 0.8
+  # normalized_with_overtime 模式：超步开始阈值 = step_total * ratio
+  step_penalty_overtime_start_ratio: 1.0
   out_of_bounds_penalty: 4.0
   energy_exhausted_penalty: 3.0
   ins_diverged_penalty: 3.0
@@ -47,11 +88,27 @@ reward:
   approach_reward_weight: 0.6
   terrain_step_scale: 1
   current_step_scale: 1
+  # 海流奖励非对称：
+  # - true: 逆流惩罚更重、顺流奖励适度（推荐）
+  # - false: 回退到对称海流奖励
+  current_asymmetric_reward: true
+  # 非对称海流：顺流（alignment>0）增益系数
+  current_positive_gain: 0.6
+  # 非对称海流：逆流（alignment<0）增益系数，建议 >= current_positive_gain
+  current_negative_gain: 1.2
+  # 每个 episode 的 current 分量绝对值预算上限；0 表示不启用预算截断
+  current_episode_budget_abs: 0.0
   terrain_component_clip: 0.5
   current_component_clip: 0.5
   # 连续能耗（A方案）：每步基础耗能 + 逆流附加耗能
   energy_base_cost: 1.0
   reverse_current_energy_scale: 0.3
+  # 能量 shaping 模式：
+  # - potential_delta: 使用势函数差分 w * (E_{t+1}/E_init - E_t/E_init)，跨不同路径长度更可比
+  # - legacy_step_cost: 旧逻辑，使用 -w * energy_step_cost
+  energy_shaping_mode: potential_delta
+  # potential_delta 模式下的单步分量裁剪上限（绝对值）；0 表示不裁剪
+  energy_potential_clip: 0.2
   energy_reward_weight: 0.05
   beacon_reward_value: 0.2
 
@@ -69,7 +126,7 @@ buffer:
   #   理论容量足够，但实现开销决定实际可行性
   # - 本地开发/验证：可用 100000-200000 快速迭代
   # 原值 12000000 在当前实现下不可运行（会导致OOM）
-  capacity: 550000
+  capacity: 1500000
 
 train:
   # 主算法选择：q_learning / double_dqn
@@ -78,7 +135,7 @@ train:
   mode: normal
   # mode=resume 时指定 checkpoint 文件路径
   resume_checkpoint_path: ""
-  total_steps: 30000
+  total_steps: 40000
   # algorithm: q_learning
   # total_steps: 50000
   # [保守稳跑档] 单卡T4推荐 batch_size=256-512
@@ -88,17 +145,16 @@ train:
   target_update: 1000
   eval_interval: 5000
   # Q-learning 专用配置
-  max_episodes: 20000
   max_steps_per_episode: 500
   eval_episodes: 10
 
 checkpoint:
   # 每 N 轮保存一次覆盖式 checkpoint（100覆盖200覆盖300...）
-  periodic_interval: 100
+  periodic_interval: 5000
   # 周期checkpoint文件名（固定文件名实现覆盖）
   periodic_filename: dqn_model_periodic.pt
   # 断点续训时默认恢复 replay buffer
-  save_buffer: true
+  save_buffer: false
 
 dqn:
   # 建议首轮先关闭阶段奖励调度，建立稳态基线
@@ -169,6 +225,7 @@ dqn:
   amp_dtype: float16
 
 beacon:
+  beacon_config_path: configs/beacons/default_beacons.json
   beacon_signal_area: 5
   beacon_locations:
     -  [19, 6]

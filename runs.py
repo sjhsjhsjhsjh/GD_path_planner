@@ -100,7 +100,7 @@ def main(cfg: DictConfig):
             cfg,
             run_dir,
             console=console,
-            smoke_episodes=cfg.train.max_episodes,
+            smoke_episodes=cfg.train.total_steps,
             skip_env_generation=True,
         )
     elif algorithm == "double_dqn":
@@ -108,7 +108,7 @@ def main(cfg: DictConfig):
             cfg,
             run_dir,
             console=console,
-            smoke_episodes=cfg.train.max_episodes,
+            smoke_episodes=cfg.train.total_steps,
             skip_env_generation=True,
         )
     else:

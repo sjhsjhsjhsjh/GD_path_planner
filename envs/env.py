@@ -9,6 +9,8 @@ from .async_step_logger import AsyncStepLogger
 from omegaconf import DictConfig
 from .read_beacon_info import read_beacon_info
 from .read_terrain_current import read_seafloor_wave
+from .beacon_layout import load_beacon_layout
+from .dynamic_ins_threshold import compute_dynamic_ins_threshold
 
 
 class Env:
@@ -102,15 +104,47 @@ class Env:
         self.run_dir = resolved_run_dir
         self.console = console
         self.step_rewards_filename = "step_rewards.csv"
-        # [性能优化] 日志开关 - 服务器训练应设为false，本地验证可设为true
-        self.enable_step_logging = True
+        # 日志策略：server_mode 下默认关闭 step 级日志，避免大规模 I/O。
+        runtime_cfg = cfg.get("runtime", {}) if hasattr(cfg, "get") else {}
+        logging_cfg = cfg.get("logging", {}) if hasattr(cfg, "get") else {}
+        server_mode = bool(runtime_cfg.get("server_mode", False))
+        explicit_step_logging = logging_cfg.get("enable_step_logging", None)
+        fallback_step_logging = bool(cfg.env.get("enable_step_logging", True))
+        if explicit_step_logging is None:
+            self.enable_step_logging = bool(fallback_step_logging and (not server_mode))
+        else:
+            self.enable_step_logging = bool(explicit_step_logging)
+        self.enable_episode_component_logging = bool(
+            logging_cfg.get("enable_episode_component_logging", True)
+        )
+        ratio_base = (
+            str(logging_cfg.get("episode_ratio_base", "abs_total")).strip().lower()
+        )
+        if ratio_base not in {"abs_total", "positive_total"}:
+            ratio_base = "abs_total"
+        self.episode_ratio_base = ratio_base
         # [性能优化] 目标先验图按episode缓存成员
         self.cached_goal_prior = None
         self.cached_goal_prior_params = None
         self.goal_distance_library = None
-        self.goal_prior_library_cache = {}
         reward_cfg = cfg.get("reward", {}) if hasattr(cfg, "get") else {}
         self.step_penalty_value = -float(reward_cfg.get("step_penalty", 0.02))
+        self.step_penalty_mode = (
+            str(reward_cfg.get("step_penalty_mode", "normalized_with_overtime"))
+            .strip()
+            .lower()
+        )
+        if self.step_penalty_mode not in {"fixed", "normalized_with_overtime"}:
+            self.step_penalty_mode = "normalized_with_overtime"
+        self.step_penalty_base_scale = float(
+            reward_cfg.get("step_penalty_base_scale", abs(self.step_penalty_value))
+        )
+        self.step_penalty_overtime_scale = float(
+            reward_cfg.get("step_penalty_overtime_scale", abs(self.step_penalty_value))
+        )
+        self.step_penalty_overtime_start_ratio = float(
+            reward_cfg.get("step_penalty_overtime_start_ratio", 1.0)
+        )
         self.out_of_bounds_penalty = -float(
             reward_cfg.get("out_of_bounds_penalty", 4.0)
         )
@@ -135,6 +169,16 @@ class Env:
         self.current_reward_weight = float(reward_cfg.get("current_reward_weight", 0.1))
         self.terrain_step_scale = float(reward_cfg.get("terrain_step_scale", 1.0))
         self.current_step_scale = float(reward_cfg.get("current_step_scale", 1.0))
+        self.current_asymmetric_reward = bool(
+            reward_cfg.get("current_asymmetric_reward", True)
+        )
+        self.current_positive_gain = float(reward_cfg.get("current_positive_gain", 0.6))
+        self.current_negative_gain = float(reward_cfg.get("current_negative_gain", 1.2))
+        if self.current_negative_gain < self.current_positive_gain:
+            self.current_negative_gain = self.current_positive_gain
+        self.current_episode_budget_abs = max(
+            0.0, float(reward_cfg.get("current_episode_budget_abs", 0.0))
+        )
         self.terrain_component_clip = float(
             reward_cfg.get("terrain_component_clip", 1.0)
         )
@@ -146,8 +190,45 @@ class Env:
             reward_cfg.get("reverse_current_energy_scale", 0.3)
         )
         self.energy_reward_weight = float(reward_cfg.get("energy_reward_weight", 0.3))
+        self.energy_shaping_mode = (
+            str(reward_cfg.get("energy_shaping_mode", "potential_delta"))
+            .strip()
+            .lower()
+        )
+        if self.energy_shaping_mode not in {"potential_delta", "legacy_step_cost"}:
+            self.energy_shaping_mode = "potential_delta"
+        self.energy_potential_clip = max(
+            0.0, float(reward_cfg.get("energy_potential_clip", 0.2))
+        )
         self.beacon_reward_value = float(reward_cfg.get("beacon_reward_value", 0.2))
-        self.ins_error_threshold = int(cfg.env.get("ins_error_threshold", 10))
+        self.default_ins_error_threshold = int(cfg.env.get("ins_error_threshold", 10))
+        self.ins_error_threshold = self.default_ins_error_threshold
+        self.dynamic_ins_error_threshold = bool(
+            cfg.env.get("dynamic_ins_error_threshold", True)
+        )
+        self.dynamic_ins_corridor_width = float(
+            cfg.env.get("dynamic_ins_corridor_width", 4.0)
+        )
+        self.dynamic_ins_safety_factor = float(
+            cfg.env.get("dynamic_ins_safety_factor", 0.9)
+        )
+        self.dynamic_ins_min = int(
+            cfg.env.get(
+                "dynamic_ins_min", max(4, self.default_ins_error_threshold // 2)
+            )
+        )
+        self.dynamic_ins_max = int(
+            cfg.env.get("dynamic_ins_max", self.default_ins_error_threshold)
+        )
+
+        self.init_energy_scale = float(cfg.env.get("init_energy_scale", 1.5))
+        self.init_energy_short_scale = float(
+            cfg.env.get("init_energy_short_scale", 2.0)
+        )
+        self.init_energy_short_step_threshold = int(
+            cfg.env.get("init_energy_short_step_threshold", 20)
+        )
+        self.init_energy_min = float(cfg.env.get("init_energy_min", 20.0))
 
         # 记录当前训练的 episode 和 step（用于日志）
         self.episode_id = 0
@@ -187,8 +268,103 @@ class Env:
         self.terrain_array = None
         self.beacon_array = None
         self.beacon_number_array = None
+        self.beacon_layout = []
+        self.beacon_layout_source = None
+
+        # 仅在构造阶段加载一次信标配置，reset 不重复读取。
+        self.beacon_layout, self.beacon_layout_source = load_beacon_layout(
+            self.cfg, self.map_width, self.map_height
+        )
+
+        self._reset_episode_reward_accumulators()
 
         atexit.register(self.close)
+
+    def _reset_episode_reward_accumulators(self):
+        self.ep_step_penalty_sum = 0.0
+        self.ep_boundary_penalty_sum = 0.0
+        self.ep_energy_penalty_sum = 0.0
+        self.ep_ins_penalty_sum = 0.0
+        self.ep_revisit_penalty_sum = 0.0
+        self.ep_goal_reward_sum = 0.0
+        self.ep_approach_reward_sum = 0.0
+        self.ep_terrain_reward_sum = 0.0
+        self.ep_current_reward_sum = 0.0
+        self.ep_energy_reward_sum = 0.0
+        self.ep_beacon_reward_sum = 0.0
+        self.ep_step_reward_sum = 0.0
+
+    def _accumulate_episode_reward_components(
+        self,
+        *,
+        step_penalty,
+        boundary_penalty,
+        energy_penalty,
+        ins_penalty,
+        revisit_penalty,
+        goal_reward,
+        approach_reward,
+        terrain_reward,
+        current_reward,
+        energy_reward,
+        beacon_reward,
+        step_reward,
+    ):
+        if not self.enable_episode_component_logging:
+            return
+        self.ep_step_penalty_sum += float(step_penalty)
+        self.ep_boundary_penalty_sum += float(boundary_penalty)
+        self.ep_energy_penalty_sum += float(energy_penalty)
+        self.ep_ins_penalty_sum += float(ins_penalty)
+        self.ep_revisit_penalty_sum += float(revisit_penalty)
+        self.ep_goal_reward_sum += float(goal_reward)
+        self.ep_approach_reward_sum += float(approach_reward)
+        self.ep_terrain_reward_sum += float(terrain_reward)
+        self.ep_current_reward_sum += float(current_reward)
+        self.ep_energy_reward_sum += float(energy_reward)
+        self.ep_beacon_reward_sum += float(beacon_reward)
+        self.ep_step_reward_sum += float(step_reward)
+
+    def get_episode_reward_breakdown(self):
+        sums = {
+            "ep_step_penalty_sum": float(self.ep_step_penalty_sum),
+            "ep_boundary_penalty_sum": float(self.ep_boundary_penalty_sum),
+            "ep_energy_penalty_sum": float(self.ep_energy_penalty_sum),
+            "ep_ins_penalty_sum": float(self.ep_ins_penalty_sum),
+            "ep_revisit_penalty_sum": float(self.ep_revisit_penalty_sum),
+            "ep_goal_reward_sum": float(self.ep_goal_reward_sum),
+            "ep_approach_reward_sum": float(self.ep_approach_reward_sum),
+            "ep_terrain_reward_sum": float(self.ep_terrain_reward_sum),
+            "ep_current_reward_sum": float(self.ep_current_reward_sum),
+            "ep_energy_reward_sum": float(self.ep_energy_reward_sum),
+            "ep_beacon_reward_sum": float(self.ep_beacon_reward_sum),
+            "ep_step_reward_sum": float(self.ep_step_reward_sum),
+        }
+        component_keys = [
+            "ep_step_penalty_sum",
+            "ep_boundary_penalty_sum",
+            "ep_energy_penalty_sum",
+            "ep_ins_penalty_sum",
+            "ep_revisit_penalty_sum",
+            "ep_goal_reward_sum",
+            "ep_approach_reward_sum",
+            "ep_terrain_reward_sum",
+            "ep_current_reward_sum",
+            "ep_energy_reward_sum",
+            "ep_beacon_reward_sum",
+        ]
+        if self.episode_ratio_base == "positive_total":
+            denom = sum(max(0.0, sums[k]) for k in component_keys)
+            for k in component_keys:
+                sums[f"{k}_ratio"] = (
+                    (max(0.0, sums[k]) / denom) if denom > 1e-12 else 0.0
+                )
+        else:
+            denom = sum(abs(sums[k]) for k in component_keys)
+            for k in component_keys:
+                sums[f"{k}_ratio"] = (abs(sums[k]) / denom) if denom > 1e-12 else 0.0
+        sums["ep_ratio_base"] = self.episode_ratio_base
+        return sums
 
     def set_reward_weights(self, **kwargs):
         if "progress_reward_scale" in kwargs:
@@ -272,35 +448,22 @@ class Env:
     def _build_goal_distance_library(self):
         width = int(self.map_width)
         height = int(self.map_height)
-        xs = np.arange(width, dtype=np.float32).reshape(-1, 1)
-        ys = np.arange(height, dtype=np.float32).reshape(1, -1)
+        goal_x = np.arange(width, dtype=np.float32).reshape(width, 1, 1, 1)
+        goal_y = np.arange(height, dtype=np.float32).reshape(1, height, 1, 1)
+        cell_x = np.arange(width, dtype=np.float32).reshape(1, 1, width, 1)
+        cell_y = np.arange(height, dtype=np.float32).reshape(1, 1, 1, height)
 
-        library = {}
-        for gx in range(width):
-            for gy in range(height):
-                dist = np.abs(xs - np.float32(gx)) + np.abs(ys - np.float32(gy))
-                library[(gx, gy)] = dist.astype(np.float32)
-
-        self.goal_distance_library = library
-        self.goal_prior_library_cache = {}
+        self.goal_distance_library = (
+            np.abs(cell_x - goal_x) + np.abs(cell_y - goal_y)
+        ).astype(np.float32)
 
     def _get_goal_prior_precomputed(self, gx: int, gy: int, denom: int):
         if self.goal_distance_library is None:
             return None
 
-        key = (int(gx), int(gy), int(denom))
-        cached = self.goal_prior_library_cache.get(key)
-        if cached is not None:
-            return cached
-
-        dist = self.goal_distance_library.get((int(gx), int(gy)))
-        if dist is None:
-            return None
-
+        dist = self.goal_distance_library[int(gx), int(gy)]
         scale = max(1.0, float(denom))
-        prior = np.exp(-dist / scale).astype(np.float32)
-        self.goal_prior_library_cache[key] = prior
-        return prior
+        return np.exp(-dist / scale).astype(np.float32)
 
     def get_observation_cache(self):
         return {
@@ -323,12 +486,6 @@ class Env:
         while self.start_x == self.goal_x and self.start_y == self.goal_y:
             self.goal_x = random.randint(0, self.map_width - 1)
             self.goal_y = random.randint(0, self.map_height - 1)
-
-        # !!!!!!!!注意：当前使用固定起终点进行试验！！！！
-        self.start_x = 6
-        self.start_y = 6
-        self.goal_x = 43
-        self.goal_y = 43
         self.robot = Robot(self.defaulf_energy, (self.start_x, self.start_y))
 
         # 设置仿真运行状态
@@ -339,7 +496,8 @@ class Env:
         self.step_total = abs(self.goal_x - self.start_x) + abs(
             self.goal_y - self.start_y
         )
-        self.now_init_energy = self.step_total * 1.5
+        self.now_init_energy = self._compute_initial_energy(self.step_total)
+        self.ins_error_threshold = self._compute_dynamic_ins_threshold()
         self.robot = Robot(self.now_init_energy, (self.start_x, self.start_y))
         self.robot.INS_error = 0
         self.generate_goal_Gauss_heatmap(10.0)
@@ -394,6 +552,9 @@ class Env:
         self.上一个信标区域编号 = -1
         self.历史途径信标区域 = []
         self.position_visit_counts = {}
+        self.current_component_abs_sum = 0.0
+        self.current_budget_remaining = float(self.current_episode_budget_abs)
+        self._reset_episode_reward_accumulators()
 
         self._sync_ins_error_with_beacon()
 
@@ -408,6 +569,30 @@ class Env:
         self._ensure_step_logger()
 
         return self._get_obs()
+
+    def _compute_initial_energy(self, step_total: int) -> float:
+        steps = max(1, int(step_total))
+        if steps <= self.init_energy_short_step_threshold:
+            energy = steps * self.init_energy_short_scale
+        else:
+            energy = steps * self.init_energy_scale
+        return max(float(self.init_energy_min), float(energy))
+
+    def _compute_dynamic_ins_threshold(self) -> int:
+        return int(
+            compute_dynamic_ins_threshold(
+                start=(int(self.start_x), int(self.start_y)),
+                goal=(int(self.goal_x), int(self.goal_y)),
+                step_total=int(self.step_total),
+                beacon_layout=self.beacon_layout,
+                dynamic_enabled=bool(self.dynamic_ins_error_threshold),
+                default_threshold=int(self.default_ins_error_threshold),
+                corridor_width=float(self.dynamic_ins_corridor_width),
+                safety_factor=float(self.dynamic_ins_safety_factor),
+                min_threshold=int(self.dynamic_ins_min),
+                max_threshold=int(self.dynamic_ins_max),
+            )
+        )
 
     # 生成目标点高斯热力图
     def generate_goal_Gauss_heatmap(self, sigma=25.0):
@@ -483,8 +668,43 @@ class Env:
         if mag == 0:
             return 0
         dot = (ux * dx + uy * dy) / (mag + 1e-9)
+        if self.current_asymmetric_reward:
+            if dot >= 0:
+                dot = dot * self.current_positive_gain
+            else:
+                dot = dot * self.current_negative_gain
         coef = getattr(self, "海流奖励单步系数", 0.0)
         return dot * coef
+
+    def _compute_step_penalty(self) -> float:
+        if self.step_penalty_mode == "fixed":
+            return float(self.step_penalty_value)
+
+        denom = max(1.0, float(getattr(self, "step_total", 1)))
+        base = -abs(self.step_penalty_base_scale) / denom
+        start_ratio = min(2.0, max(0.0, float(self.step_penalty_overtime_start_ratio)))
+        overtime_start = max(1.0, start_ratio * denom)
+        current_step = float(max(1, int(getattr(self, "step_in_episode", 1))))
+        over_steps = max(0.0, current_step - overtime_start)
+        overtime = -abs(self.step_penalty_overtime_scale) * (over_steps / denom)
+        return float(base + overtime)
+
+    def _apply_current_component_budget(self, current_component: float) -> float:
+        budget = float(self.current_episode_budget_abs)
+        if budget <= 0:
+            self.current_component_abs_sum = float(
+                self.current_component_abs_sum
+            ) + abs(float(current_component))
+            self.current_budget_remaining = 0.0
+            return float(current_component)
+
+        used = float(getattr(self, "current_component_abs_sum", 0.0))
+        remaining = max(0.0, budget - used)
+        capped = float(np.clip(current_component, -remaining, remaining))
+        used = used + abs(capped)
+        self.current_component_abs_sum = used
+        self.current_budget_remaining = max(0.0, budget - used)
+        return capped
 
     def 计算海流对齐值(self, last_pos, cur_pos):
         try:
@@ -542,7 +762,7 @@ class Env:
         step_terminated = 0
         last_pos = (self.robot.pos_x, self.robot.pos_y)
         termination_reason = "running"
-        step_penalty = self.step_penalty_value
+        step_penalty = 0.0
         boundary_penalty = 0.0
         energy_penalty = 0.0
         ins_penalty = 0.0
@@ -558,16 +778,32 @@ class Env:
 
         # 增加本 episode 的 step 计数（用于日志）
         self.step_in_episode = int(getattr(self, "step_in_episode", 0)) + 1
+        step_penalty = self._compute_step_penalty()
 
         self.move_robot(action)
 
         cur_pos = (self.robot.pos_x, self.robot.pos_y)
 
         # 连续能耗：基础耗能 + 逆流附加耗能
+        energy_before = float(self.robot.energy)
         海流对齐值 = self.计算海流对齐值(last_pos, cur_pos)
         单步能耗 = self.计算单步能耗(海流对齐值)
         self.robot.energy = self.robot.energy - 单步能耗
-        临时能耗奖励 = -self.energy_reward_weight * 单步能耗
+        if self.energy_shaping_mode == "potential_delta":
+            init_energy = max(1e-6, float(self.now_init_energy))
+            pre_ratio = energy_before / init_energy
+            post_ratio = float(self.robot.energy) / init_energy
+            临时能耗奖励 = self.energy_reward_weight * (post_ratio - pre_ratio)
+            if self.energy_potential_clip > 0:
+                临时能耗奖励 = float(
+                    np.clip(
+                        临时能耗奖励,
+                        -self.energy_potential_clip,
+                        self.energy_potential_clip,
+                    )
+                )
+        else:
+            临时能耗奖励 = -self.energy_reward_weight * 单步能耗
 
         # 先进行结束条件判断
         # 超出地图边界，死了
@@ -624,6 +860,20 @@ class Env:
 
         # 单轮仿真游戏结束判断
         if step_terminated == 1:
+            self._accumulate_episode_reward_components(
+                step_penalty=step_penalty,
+                boundary_penalty=boundary_penalty,
+                energy_penalty=energy_penalty,
+                ins_penalty=ins_penalty,
+                revisit_penalty=revisit_penalty,
+                goal_reward=goal_reward,
+                approach_reward=临时靠近目标奖励,
+                terrain_reward=临时地形奖励,
+                current_reward=临时海流奖励,
+                energy_reward=临时能耗奖励,
+                beacon_reward=临时信标奖励,
+                step_reward=step_reward,
+            )
             dx = self.goal_x - self.robot.pos_x
             dy = self.goal_y - self.robot.pos_y
             self._append_step_reward_log(
@@ -689,6 +939,7 @@ class Env:
         approach_component = 临时靠近目标奖励 * self.approach_reward_weight
         terrain_component = 临时地形奖励 * self.terrain_reward_weight
         current_component = 临时海流奖励 * self.current_reward_weight
+        current_component = self._apply_current_component_budget(current_component)
         step_reward = (
             step_reward
             + step_penalty
@@ -701,6 +952,20 @@ class Env:
         临时靠近目标奖励 = approach_component
         临时地形奖励 = terrain_component
         临时海流奖励 = current_component
+        self._accumulate_episode_reward_components(
+            step_penalty=step_penalty,
+            boundary_penalty=boundary_penalty,
+            energy_penalty=energy_penalty,
+            ins_penalty=ins_penalty,
+            revisit_penalty=revisit_penalty,
+            goal_reward=goal_reward,
+            approach_reward=临时靠近目标奖励,
+            terrain_reward=临时地形奖励,
+            current_reward=临时海流奖励,
+            energy_reward=临时能耗奖励,
+            beacon_reward=临时信标奖励,
+            step_reward=step_reward,
+        )
         self._append_step_reward_log(
             action=action,
             last_pos=last_pos,

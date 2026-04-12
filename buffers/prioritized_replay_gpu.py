@@ -2,6 +2,7 @@ from collections import deque
 from collections import OrderedDict
 from typing import Deque, Dict, List, Optional, Tuple
 
+import numpy as np
 import torch
 
 
@@ -120,6 +121,11 @@ class PrioritizedNStepReplayBufferGPU:
         if torch.is_tensor(goal_distance_library):
             return goal_distance_library.to(device=self.device, dtype=self.replay_dtype)
 
+        if isinstance(goal_distance_library, np.ndarray):
+            return torch.as_tensor(
+                goal_distance_library, dtype=self.replay_dtype, device=self.device
+            )
+
         if isinstance(goal_distance_library, dict):
             bank = []
             for gx in range(width):
@@ -201,10 +207,9 @@ class PrioritizedNStepReplayBufferGPU:
         else:
             bank = self.map_cache["goal_distance_bank"]
             height = int(self.map_cache["height"])
-            goal_idx = (goal_x.to(torch.int64) * height + goal_y.to(torch.int64)).view(
-                -1
-            )
-            dist_maps = bank.index_select(0, goal_idx)
+            dist_maps = bank[
+                goal_x.to(torch.int64).view(-1), goal_y.to(torch.int64).view(-1)
+            ]
             denom = step_total.to(dtype=self.replay_dtype).clamp_min(1.0).view(-1, 1, 1)
             prior_maps = torch.exp(-(dist_maps.to(dtype=self.replay_dtype) / denom))
 
@@ -286,13 +291,20 @@ class PrioritizedNStepReplayBufferGPU:
         u_norm = self.map_cache["u_norm"]
         v_norm = self.map_cache["v_norm"]
         beacon = self.map_cache["beacon"]
-        goal_prior = self._goal_prior_map(
-            width=int(self.map_cache["width"]),
-            height=int(self.map_cache["height"]),
-            gx=gx,
-            gy=gy,
-            denom=step_total,
-        )
+        goal_distance_bank = self.map_cache.get("goal_distance_bank")
+        if goal_distance_bank is not None:
+            goal_prior = torch.exp(
+                -goal_distance_bank[gx, gy].to(dtype=self.replay_dtype)
+                / max(1.0, float(step_total))
+            )
+        else:
+            goal_prior = self._goal_prior_map(
+                width=int(self.map_cache["width"]),
+                height=int(self.map_cache["height"]),
+                gx=gx,
+                gy=gy,
+                denom=step_total,
+            )
         return torch.stack(
             [
                 self._extract_patch(terrain, x, y, size),

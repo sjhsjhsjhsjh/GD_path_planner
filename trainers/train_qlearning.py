@@ -115,9 +115,7 @@ def train_with_cfg(
     eps_start = cfg.agent.epsilon_start if hasattr(cfg.agent, "epsilon_start") else 1.0
     eps_end = cfg.agent.epsilon_end if hasattr(cfg.agent, "epsilon_end") else 0.01
     if smoke_episodes is None:
-        smoke_episodes = (
-            cfg.train.max_episodes if hasattr(cfg.train, "max_episodes") else 50
-        )
+        smoke_episodes = int(cfg.train.get("total_steps", 50))
     decay_steps = (
         cfg.agent.epsilon_decay_steps
         if hasattr(cfg.agent, "epsilon_decay_steps")
@@ -157,6 +155,30 @@ def train_with_cfg(
                 "success",
                 "termination_reason",
                 "energy_remaining",
+                "ep_step_penalty_sum",
+                "ep_boundary_penalty_sum",
+                "ep_energy_penalty_sum",
+                "ep_ins_penalty_sum",
+                "ep_revisit_penalty_sum",
+                "ep_goal_reward_sum",
+                "ep_approach_reward_sum",
+                "ep_terrain_reward_sum",
+                "ep_current_reward_sum",
+                "ep_energy_reward_sum",
+                "ep_beacon_reward_sum",
+                "ep_step_reward_sum",
+                "ep_step_penalty_sum_ratio",
+                "ep_boundary_penalty_sum_ratio",
+                "ep_energy_penalty_sum_ratio",
+                "ep_ins_penalty_sum_ratio",
+                "ep_revisit_penalty_sum_ratio",
+                "ep_goal_reward_sum_ratio",
+                "ep_approach_reward_sum_ratio",
+                "ep_terrain_reward_sum_ratio",
+                "ep_current_reward_sum_ratio",
+                "ep_energy_reward_sum_ratio",
+                "ep_beacon_reward_sum_ratio",
+                "ep_ratio_base",
             ]
         )
 
@@ -201,6 +223,7 @@ def train_with_cfg(
                 else 0
             )
             termination_reason = getattr(env, "last_termination_reason", "unknown")
+            episode_breakdown = env.get_episode_reward_breakdown()
             writer.writerow(
                 [
                     ep,
@@ -215,6 +238,30 @@ def train_with_cfg(
                     success,
                     termination_reason,
                     _fmt_float5(env.robot.energy),
+                    _fmt_float5(episode_breakdown["ep_step_penalty_sum"]),
+                    _fmt_float5(episode_breakdown["ep_boundary_penalty_sum"]),
+                    _fmt_float5(episode_breakdown["ep_energy_penalty_sum"]),
+                    _fmt_float5(episode_breakdown["ep_ins_penalty_sum"]),
+                    _fmt_float5(episode_breakdown["ep_revisit_penalty_sum"]),
+                    _fmt_float5(episode_breakdown["ep_goal_reward_sum"]),
+                    _fmt_float5(episode_breakdown["ep_approach_reward_sum"]),
+                    _fmt_float5(episode_breakdown["ep_terrain_reward_sum"]),
+                    _fmt_float5(episode_breakdown["ep_current_reward_sum"]),
+                    _fmt_float5(episode_breakdown["ep_energy_reward_sum"]),
+                    _fmt_float5(episode_breakdown["ep_beacon_reward_sum"]),
+                    _fmt_float5(episode_breakdown["ep_step_reward_sum"]),
+                    _fmt_float5(episode_breakdown["ep_step_penalty_sum_ratio"]),
+                    _fmt_float5(episode_breakdown["ep_boundary_penalty_sum_ratio"]),
+                    _fmt_float5(episode_breakdown["ep_energy_penalty_sum_ratio"]),
+                    _fmt_float5(episode_breakdown["ep_ins_penalty_sum_ratio"]),
+                    _fmt_float5(episode_breakdown["ep_revisit_penalty_sum_ratio"]),
+                    _fmt_float5(episode_breakdown["ep_goal_reward_sum_ratio"]),
+                    _fmt_float5(episode_breakdown["ep_approach_reward_sum_ratio"]),
+                    _fmt_float5(episode_breakdown["ep_terrain_reward_sum_ratio"]),
+                    _fmt_float5(episode_breakdown["ep_current_reward_sum_ratio"]),
+                    _fmt_float5(episode_breakdown["ep_energy_reward_sum_ratio"]),
+                    _fmt_float5(episode_breakdown["ep_beacon_reward_sum_ratio"]),
+                    str(episode_breakdown["ep_ratio_base"]),
                 ]
             )
             csvfile.flush()
@@ -229,6 +276,11 @@ def train_with_cfg(
                 q_path = os.path.join(out_dir, "q_table_best.npz")
                 saved_path = agent.save(q_path)
                 log(console, "INFO", f"Saved best Q table: {saved_path}")
+
+        # 训练结束后强制保存一次最终模型（不含 replay buffer）。
+        final_q_path = os.path.join(out_dir, "q_table_final.npz")
+        final_saved_path = agent.save(final_q_path)
+        log(console, "INFO", f"Saved final Q table: {final_saved_path}")
 
     env.close()
     log(console, "INFO", f"训练完成，日志保存在 {csv_path}")

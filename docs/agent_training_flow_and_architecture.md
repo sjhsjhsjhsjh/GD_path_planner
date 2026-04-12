@@ -40,6 +40,9 @@
 - `scripts/`
   - `collect_step_rewards.py`：step 奖励分解统计与图表。
   - `collect_summary.py`：训练日志摘要统计。
+  - `beacon_layout_editor.py`：独立信标布局编辑器（交互式增删改半径，保存 JSON）。
+  - `ins_threshold_visual_tester.py`：动态 INS 阈值可视化验证工具（点击起终点并显示阈值细节）。
+  - `pressure_test_buffer_capacity.py`：GPU 回放池容量压测（按容量阶梯写入并监控显存占用）。
 
 ## 3. 端到端训练执行流程
 
@@ -107,6 +110,20 @@
 - 每步动作后 `INS_error += 1`
 - 若当前位置被信标覆盖，INS 误差立即归零
 - 通过该机制鼓励轨迹经过信标区域，抑制定位发散
+- 环境支持动态 INS 阈值：
+  - 开启 `env.dynamic_ins_error_threshold=true` 时，按起终点、信标布局和走廊宽度动态计算本轮阈值。
+  - 关键参数：`dynamic_ins_corridor_width`、`dynamic_ins_safety_factor`、`dynamic_ins_min`、`dynamic_ins_max`。
+  - 关闭时回退到固定阈值 `env.ins_error_threshold`。
+
+## 4.7 reset 初始化策略（已更新）
+
+- `Env.reset()` 当前为随机起终点：
+  - 起点：在地图范围内随机采样
+  - 终点：在地图范围内随机采样，且强制不与起点重合
+- 每轮会基于 `step_total` 计算：
+  - 初始能量（短路径与常规路径使用不同 scale，并受 `init_energy_min` 下限约束）
+  - 本轮 `ins_error_threshold`（动态阈值开启时）
+- reset 后会执行一次信标同步（若落在覆盖区则 INS 误差归零）。
 
 ## 4.6 step 日志
 
@@ -229,15 +246,34 @@
 
 - `train.algorithm`: `q_learning` / `double_dqn`
 - `env.*`: 地图尺寸、动作维度、INS 阈值
+- `env.dynamic_ins_*`: 动态 INS 阈值参数（走廊宽度/安全系数/上下限）
+- `env.init_energy_*`: 初始能量计算参数（常规倍率、短程倍率、短程阈值、最小能量）
 - `reward.*`: 所有奖励/惩罚超参数
 - `stage.*`: Q-Learning 的阶段调度比例
 - `buffer.capacity`: DQN 回放容量
 - `dqn.*`: patch 尺寸、PER、n-step、tau、device 等
   - **新增（2026-04-09）**：
-    - `reconstruct_patch_on_sample`：启用 patch 延迟重建（true/false，默认 true）
+    - `reconstruct_patch_on_sample`：启用 patch 延迟重建（true/false，当前配置默认 false）
     - `cache_maps_on_gpu`：环境地图张量化驻留 GPU（true/false，默认 true）
     - `goal_prior_cache_size`：目标先验图 LRU 缓存容量（默认 64）
-- `beacon.*`: 信标位置与覆盖半径
+- `beacon.beacon_config_path`: 外部信标布局文件路径（JSON，优先级高于 `beacon_locations`）
+- `beacon.beacon_locations`: 兼容回退字段（当 JSON 文件不存在时启用）
+
+## 8.1 信标布局配置来源（当前实现）
+
+- 环境在构造阶段仅加载一次信标布局，不在每次 reset 重复读取。
+- 优先从 `beacon.beacon_config_path` 指向的 JSON 读取信标列表（每个信标含 `x/y/radius`）。
+- 当 JSON 路径为空或文件不存在时，回退读取 `beacon.beacon_locations` 与 `beacon_signal_area`。
+
+## 8.2 回放池容量压测脚本（新增）
+
+- 脚本：`scripts/pressure_test_buffer_capacity.py`
+- 配置：`configs/buffer_pressure_test.yaml`
+- 目标：
+  - 按容量阶梯创建/填充 GPU 回放池
+  - 打印 `cap / len / writes / used / reserved / peak_allocated`
+  - 在达到目标显存占用比例（默认 90%）或 OOM 时停止
+  - 给出正式训练建议容量（保留 10%-15% 显存余量）
 
 ## 9. 后续 Agent 常见任务入口建议
 
@@ -251,7 +287,7 @@
 
 ## 10. 当前实现中的显式行为备注
 
-- `Env.reset()` 内部当前使用固定起终点（`(6,6) -> (43,43)`）覆盖了随机采样结果。
+- `Env.reset()` 当前使用随机起终点，且保证起终点不重合；相关初始能量与 INS 阈值按本轮起终点动态确定。
 - `runs.py` 每次启动会清理旧输出目录（保留最近 2 次），重要实验结果需提前备份。
 
 ## 11. 近期已落实的性能与存储优化（2026-04-11）

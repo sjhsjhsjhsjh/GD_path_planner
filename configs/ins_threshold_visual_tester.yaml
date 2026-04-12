@@ -1,0 +1,27 @@
+tester:
+  base_config_path: configs/config1.yaml
+  terrain_run_dir: outputs/sanity_check
+  # 可选：若填写则覆盖 base_config 中 beacon.beacon_config_path
+  beacon_config_path: ""
+
+  rows: 50
+  cols: 50
+
+  # 算法参数，默认继承 base_config；在此填写可覆盖
+  # 等价于 config1.yaml 的 dynamic_ins_error_threshold：
+  # true=按起终点和信标分布动态计算阈值，false=固定用 default_threshold。
+  dynamic_enabled: true
+  # 固定阈值基线：当 dynamic_enabled=false 时直接使用。
+  # 即使 dynamic_enabled=true，也会在异常短路径等回退场景中使用该值。
+  default_threshold: 15
+  # 等价于 config1.yaml 的 dynamic_ins_corridor_width（单位：网格）：
+  # 信标到起终点连线距离 <= corridor_width + beacon_radius 才纳入候选锚点。
+  corridor_width: 4
+  # 等价于 config1.yaml 的 dynamic_ins_safety_factor：
+  # raw_threshold = ceil(max_gap_steps * safety_factor)。
+  # 值越大越宽松，值越小越严格。
+  safety_factor: 0.7
+  # 最终阈值下限（final_threshold 会被裁剪到 [min_threshold, max_threshold]）。
+  min_threshold: 5
+  # 最终阈值上限（final_threshold 会被裁剪到 [min_threshold, max_threshold]）。
+  max_threshold: 14

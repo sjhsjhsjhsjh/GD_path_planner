@@ -1,0 +1,27 @@
+pressure_test:
+  base_config_path: configs/config1.yaml
+
+  # test_mode:
+  # - from_config: use dqn.replay_store_mode from base config
+  # - force_meta_only: always use meta_only
+  # - force_full_patch: always use full_patch
+  test_mode: from_config
+
+  # Capacity sweep strategy: start -> start + step -> ... -> max_capacity
+  start_capacity: 550000
+  capacity_step: 50000
+  max_capacity: 5000000
+
+  # Write controls
+  write_batch_size: 1000
+  max_total_writes: 5000000
+
+  # Stop when used ratio reaches threshold.
+  # Used ratio is computed from CUDA driver free/total memory.
+  stop_gpu_usage_ratio: 0.90
+
+  # Report progress every N batches
+  report_interval_batches: 10
+
+  # For deterministic random generation
+  seed: 2026

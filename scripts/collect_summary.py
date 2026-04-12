@@ -12,7 +12,14 @@ def main(log_path):
     var = sum((x - avg_reward) ** 2 for x in rewards) / episodes
     std_reward = var**0.5
     avg_steps = sum(steps) / episodes
-    successes = sum(1 for x in rewards if x > 0)
+    if rows and "success" in rows[0]:
+        successes = sum(int(float(r.get("success", 0) or 0)) for r in rows)
+    else:
+        successes = sum(
+            1
+            for r in rows
+            if str(r.get("termination_reason", "")).strip() == "goal_reached"
+        )
     print(f"episodes: {episodes}")
     print(f"avg_reward: {avg_reward:.4f}")
     print(f"std_reward: {std_reward:.4f}")

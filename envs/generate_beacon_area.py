@@ -7,6 +7,7 @@ from utils import log as log
 from envs import read_terrain as read_terrain
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from .environment_grid import update_environment_grid
+from .beacon_layout import load_beacon_layout
 
 
 def _get_pyplot(cfg: DictConfig):
@@ -29,11 +30,10 @@ def generate_beacon_area(cfg: DictConfig, run_dir: str, console):
     :return beacon_map: 2D数组，记录每个点的信号强度；
     :return beacon_number_map: 2D数组，记录每个点覆盖的信标编号
     """
-    # 从配置中加载参数
-    beacons_pos_list = [tuple(p) for p in cfg.beacon.beacon_locations]
-    beacon_signal_area = cfg.beacon.beacon_signal_area
+    # 从配置中加载参数（优先外部 JSON，回退到 beacon_locations）
     map_width = int(cfg.env.rows)
     map_height = int(cfg.env.cols)
+    beacon_layout, beacon_source = load_beacon_layout(cfg, map_width, map_height)
 
     # 生成信标覆盖区域
     beacon_map = np.zeros((map_width, map_height))  # 记录每个点的信号强度
@@ -41,15 +41,17 @@ def generate_beacon_area(cfg: DictConfig, run_dir: str, console):
         (map_width, map_height)
     )  # 记录每个点覆盖的信标编号（0表示无信标覆盖，1开始表示第1个信标，以此类推）
     temp_index = 0
-    for beacon in beacons_pos_list:
-        bx = beacon[0]
-        by = beacon[1]
+    for beacon in beacon_layout:
+        bx = int(beacon["x"])
+        by = int(beacon["y"])
+        radius = max(1, int(beacon["radius"]))
         temp_index = temp_index + 1  # 信标编号从1开始，0表示无信标覆盖
         for i in range(map_width):
             for j in range(map_height):
                 dist = abs(bx - i) + abs(by - j)
-                if dist <= beacon_signal_area:
-                    signal_strength = (beacon_signal_area - dist) / beacon_signal_area
+                # 与 Env 逻辑保持一致：只有 beacon_strength > 0 才算进入信标覆盖区
+                if dist < radius:
+                    signal_strength = 1.0 - (dist / radius)
                     # 信标覆盖强度叠加，但记录最强信号对应的信标编号
                     if beacon_map[i][j] < signal_strength:
                         beacon_number_map[i][j] = temp_index
@@ -68,12 +70,13 @@ def generate_beacon_area(cfg: DictConfig, run_dir: str, console):
     cbar1 = plt.colorbar(im1, cax=cax1)
     cbar1.set_label("depth (normalized)")
 
+    masked_strength = np.ma.masked_where(beacon_map <= 0.0, beacon_map)
     im2 = ax.imshow(
-        beacon_number_map, cmap="tab20", origin="lower", alpha=0.4
-    )  # 叠加层：信标信号
+        masked_strength, cmap="plasma", origin="lower", alpha=0.55, vmin=0.0, vmax=1.0
+    )  # 叠加层：与 Env 判定一致的覆盖强度
     cax2 = divider.append_axes("right", size="5%", pad=0.15)  # colorbar 2
     cbar2 = plt.colorbar(im2, cax=cax2, fraction=0.046, pad=0.04)
-    cbar2.set_label("beacon signal")
+    cbar2.set_label("beacon_strength (active when > 0)")
 
     # 保存
     csv_path = update_environment_grid(
@@ -90,6 +93,14 @@ def generate_beacon_area(cfg: DictConfig, run_dir: str, console):
         "SUCC",
         f"信标覆盖区域生成完成！已保存信标覆盖图、信号覆盖数组、信标覆盖数组: {fig_path}",
     )
+    if beacon_source:
+        log(console, "INFO", f"信标来源文件: {beacon_source}")
+    else:
+        log(
+            console,
+            "WARN",
+            "未检测到 beacon_config_path 文件，已回退到 beacon_locations",
+        )
     log(console, "INFO", f"环境网格 CSV 已更新: {csv_path}")
 
     return beacon_map, beacon_number_map
