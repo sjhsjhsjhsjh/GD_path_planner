@@ -135,7 +135,7 @@ train:
   mode: normal
   # mode=resume 时指定 checkpoint 文件路径
   resume_checkpoint_path: ""
-  total_steps: 40000
+  total_steps: 50000
   # algorithm: q_learning
   # total_steps: 50000
   # [保守稳跑档] 单卡T4推荐 batch_size=256-512
