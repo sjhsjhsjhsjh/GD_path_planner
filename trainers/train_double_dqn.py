@@ -633,7 +633,7 @@ def train_double_dqn_with_cfg(
                 console,
                 "INFO",
                 f"[DQN] Ep {ep}: reward={ep_reward:.3f}, steps={ep_steps}, eps={epsilon:.4f}, eps_stage={epsilon_stage}, "
-                f"term={termination_reason}, loss={loss_mean:.5f}, buffer={len(buffer)}",
+                f"total_step={int(getattr(env, 'step_total', 0))}, term={termination_reason}, loss={loss_mean:.5f}, buffer={len(buffer)}",
             )
 
             if ep_reward > best_reward:

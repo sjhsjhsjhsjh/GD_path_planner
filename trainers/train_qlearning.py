@@ -268,7 +268,8 @@ def train_with_cfg(
             log(
                 console,
                 "INFO",
-                f"Ep {ep}: reward={total_reward:.3f}, steps={steps}, eps={epsilon:.4f}, stage={stage_name}, term={termination_reason}",
+                f"Ep {ep}: reward={total_reward:.3f}, steps={steps}, eps={epsilon:.4f}, stage={stage_name}, "
+                f"total_step={int(getattr(env, 'step_total', 0))}, term={termination_reason}",
             )
 
             if total_reward > best_reward:
