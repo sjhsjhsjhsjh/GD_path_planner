@@ -21,7 +21,7 @@ env:
   # 动态阈值下限（最终阈值会被裁剪到 [dynamic_ins_min, dynamic_ins_max] 区间）。
   dynamic_ins_min: 4
   # 动态阈值上限（最终阈值会被裁剪到 [dynamic_ins_min, dynamic_ins_max] 区间）。
-  dynamic_ins_max: 14
+  dynamic_ins_max: 15
   init_energy_scale: 1.5
   init_energy_short_scale: 2.0
   init_energy_short_step_threshold: 20
