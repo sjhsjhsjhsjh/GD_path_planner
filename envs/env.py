@@ -79,6 +79,7 @@ class Env:
         "energy_step_cost",
         "current_alignment",
         "beacon_reward",
+        "approach_beacon_reward",
         "step_reward",
     ]
 
@@ -201,6 +202,23 @@ class Env:
             0.0, float(reward_cfg.get("energy_potential_clip", 0.2))
         )
         self.beacon_reward_value = float(reward_cfg.get("beacon_reward_value", 0.2))
+        # 动态信标奖励参数
+        self.beacon_reward_urgency_threshold = float(
+            reward_cfg.get("beacon_reward_urgency_threshold", 0.5)
+        )
+        self.beacon_reward_urgency_scale = float(
+            reward_cfg.get("beacon_reward_urgency_scale", 2.0)
+        )
+        # 约束靠近信标参数
+        self.risk_awareness_threshold = float(
+            reward_cfg.get("risk_awareness_threshold", 0.7)
+        )
+        self.approach_beacon_reward = float(
+            reward_cfg.get("approach_beacon_reward", 0.5)
+        )
+        self.move_away_beacon_penalty = float(
+            reward_cfg.get("move_away_beacon_penalty", 0.1)
+        )
         self.default_ins_error_threshold = int(cfg.env.get("ins_error_threshold", 10))
         self.ins_error_threshold = self.default_ins_error_threshold
         self.dynamic_ins_error_threshold = bool(
@@ -554,6 +572,10 @@ class Env:
         self.position_visit_counts = {}
         self.current_component_abs_sum = 0.0
         self.current_budget_remaining = float(self.current_episode_budget_abs)
+        # 初始化信标距离跟踪（用于约束靠近激励）
+        self.last_min_beacon_distance = self._compute_min_beacon_distance(
+            (self.robot.pos_x, self.robot.pos_y)
+        )
         self._reset_episode_reward_accumulators()
 
         self._sync_ins_error_with_beacon()
@@ -593,6 +615,17 @@ class Env:
                 max_threshold=int(self.dynamic_ins_max),
             )
         )
+
+    def _compute_min_beacon_distance(self, pos):
+        """计算从给定位置到最近信标的曼哈顿距离"""
+        if not self.beacon_layout:
+            return float("inf")
+        min_dist = float("inf")
+        for beacon_x, beacon_y in self.beacon_layout:
+            dist = abs(pos[0] - beacon_x) + abs(pos[1] - beacon_y)
+            if dist < min_dist:
+                min_dist = dist
+        return min_dist
 
     # 生成目标点高斯热力图
     def generate_goal_Gauss_heatmap(self, sigma=25.0):
@@ -736,8 +769,11 @@ class Env:
     def _get_obs(self):
         dx = self.goal_x - self.robot.pos_x
         dy = self.goal_y - self.robot.pos_y
-        ins_error = min(int(self.robot.INS_error), self.ins_error_threshold)
-        return (self.robot.pos_x, self.robot.pos_y, dx, dy, ins_error)
+        # 将 INS_error 改为紧急度比值（0-1），而不是绝对值
+        ins_error_ratio = min(
+            float(self.robot.INS_error) / float(self.ins_error_threshold), 1.0
+        )
+        return (self.robot.pos_x, self.robot.pos_y, dx, dy, ins_error_ratio)
 
     def move_robot(self, action):
         # 执行 action
@@ -778,6 +814,10 @@ class Env:
 
         # 增加本 episode 的 step 计数（用于日志）
         self.step_in_episode = int(getattr(self, "step_in_episode", 0)) + 1
+        # 保存移动前的 INS_error（用于计算紧急度）
+        ins_error_before_move = float(self.robot.INS_error)
+        # 保存移动前到最近信标的距离
+        min_beacon_dist_before = float(self.last_min_beacon_distance)
         step_penalty = self._compute_step_penalty()
 
         self.move_robot(action)
@@ -895,6 +935,7 @@ class Env:
                 energy_step_cost=单步能耗,
                 current_alignment=海流对齐值,
                 beacon_reward=临时信标奖励,
+                approach_beacon_reward=0.0,
                 step_reward=step_reward,
             )
             return (
@@ -920,7 +961,21 @@ class Env:
         ):
             self.上一个信标区域编号 = self.beacon_number_map[cur_pos[0]][cur_pos[1]]
             self.历史途径信标区域.append(self.上一个信标区域编号)
-            临时信标奖励 = self.beacon_reward_value
+            # 方案1：计算动态信标奖励（基于紧急度）
+            temp_base_reward = self.beacon_reward_value
+            urgency_ratio = min(
+                1.0, ins_error_before_move / float(self.ins_error_threshold)
+            )
+            if urgency_ratio > self.beacon_reward_urgency_threshold:
+                urgency_bonus = (
+                    urgency_ratio - self.beacon_reward_urgency_threshold
+                ) * self.beacon_reward_urgency_scale
+                temp_base_reward = temp_base_reward + urgency_bonus
+            临时信标奖励 = temp_base_reward
+
+        # 计算移动后到最近信标的距离，用于约束靠近激励
+        min_beacon_dist_after = self._compute_min_beacon_distance(cur_pos)
+        self.last_min_beacon_distance = min_beacon_dist_after
 
         # 如果没有结束，那么计算单步奖励
         临时靠近目标奖励 = self.计算靠近目标奖励(
@@ -940,6 +995,24 @@ class Env:
         terrain_component = 临时地形奖励 * self.terrain_reward_weight
         current_component = 临时海流奖励 * self.current_reward_weight
         current_component = self._apply_current_component_budget(current_component)
+
+        # 方案3: 约束靠近激励（仅当INS紧急度>阈值时）
+        临时靠近信标奖励 = 0.0
+        current_ins_ratio = min(
+            1.0, float(self.robot.INS_error) / float(self.ins_error_threshold)
+        )
+        if current_ins_ratio > self.risk_awareness_threshold:
+            if (
+                min_beacon_dist_before != float("inf")
+                and min_beacon_dist_after < min_beacon_dist_before
+            ):
+                临时靠近信标奖励 = self.approach_beacon_reward
+            elif (
+                min_beacon_dist_before != float("inf")
+                and min_beacon_dist_after > min_beacon_dist_before
+            ):
+                临时靠近信标奖励 = -self.move_away_beacon_penalty
+
         step_reward = (
             step_reward
             + step_penalty
@@ -948,6 +1021,7 @@ class Env:
             + current_component
             + 临时能耗奖励
             + 临时信标奖励
+            + 临时靠近信标奖励
         )
         临时靠近目标奖励 = approach_component
         临时地形奖励 = terrain_component
@@ -985,6 +1059,7 @@ class Env:
             energy_step_cost=单步能耗,
             current_alignment=海流对齐值,
             beacon_reward=临时信标奖励,
+            approach_beacon_reward=临时靠近信标奖励,
             step_reward=step_reward,
         )
 
@@ -1029,6 +1104,7 @@ class Env:
         energy_step_cost,
         current_alignment,
         beacon_reward,
+        approach_beacon_reward,
         step_reward,
     ):
         if not getattr(self, "enable_step_logging", True):
@@ -1070,6 +1146,7 @@ class Env:
                     self._fmt_float5(energy_step_cost),
                     self._fmt_float5(current_alignment),
                     self._fmt_float5(beacon_reward),
+                    self._fmt_float5(approach_beacon_reward),
                     self._fmt_float5(step_reward),
                 ]
             )

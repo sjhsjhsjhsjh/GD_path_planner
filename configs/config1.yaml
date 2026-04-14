@@ -4,7 +4,8 @@ env:
   seed: 2025
   map_size: 100
   action_dim: 4
-  # 使用坐标+目标向量+惯导误差作为观测（x,y,dx,dy,ins_error）
+  # 使用坐标+目标向量+惯导误差作为观测（x,y,dx,dy,ins_error_ratio）
+  # 注：ins_error 已从绝对值改为紧急度比值 (0~1)，便于网络学习紧急程度
   obs_dim: 5
   # INS 误差终止阈值基线：当关闭动态阈值时直接使用该值；
   # 开启动态阈值时作为 default 值与上限裁剪参考。
@@ -17,13 +18,13 @@ env:
   # 动态阈值安全系数：
   # raw_threshold = ceil(max_gap_steps * dynamic_ins_safety_factor)
   # 值越大阈值越宽松，值越小越严格。
-  dynamic_ins_safety_factor: 0.9
+  dynamic_ins_safety_factor: 1.1
   # 动态阈值下限（最终阈值会被裁剪到 [dynamic_ins_min, dynamic_ins_max] 区间）。
   dynamic_ins_min: 4
   # 动态阈值上限（最终阈值会被裁剪到 [dynamic_ins_min, dynamic_ins_max] 区间）。
   dynamic_ins_max: 15
-  init_energy_scale: 1.5
-  init_energy_short_scale: 2.0
+  init_energy_scale: 1.7
+  init_energy_short_scale: 2.3
   init_energy_short_step_threshold: 20
   init_energy_min: 20
   cannot_drive_depth: 0.5
@@ -111,6 +112,49 @@ reward:
   energy_potential_clip: 0.2
   energy_reward_weight: 0.05
   beacon_reward_value: 0.2
+  
+  # =========================== 信标激励机制（方案1+方案3） ===========================
+  # 【方案1：动态信标奖励】基于INS误差紧急程度动态调整信标奖励
+  # 当Agent访问信标时，根据当前INS_error与阈值的比值决定是否加成
+  # 
+  # 奖励计算公式：
+  #   base = beacon_reward_value  # 基础奖励（0.2）
+  #   if (ins_error / threshold) > urgency_threshold:
+  #       bonus = (ratio - urgency_threshold) * urgency_scale
+  #   total = base + bonus
+  #
+  # 典型场景：
+  #   - INS 10% (低风险): 0.2 + 0 = 0.2 （可选靠近）
+  #   - INS 70% (中风险): 0.2 + (0.7-0.5)*2 = 0.6 （有动力靠近）
+  #   - INS 95% (高风险): 0.2 + (0.95-0.5)*2 = 1.1 （强激励靠近）
+  # 
+  # 当INS紧急程度超过此阈值时，开始加成信标奖励（0~1）
+  beacon_reward_urgency_threshold: 0.5
+  # 加成的倍数系数：bulk = (ratio - threshold) * scale
+  # 值越大，高紧急度下的激励越强
+  beacon_reward_urgency_scale: 2.0
+  
+  # =========================== 【方案3：约束靠近激励】 ===========================
+  # 当INS误差接近超靎时，显式激励Agent靠近信标区域（而不是直冲终点）
+  # 仅在高风险区（ratio > risk_awareness_threshold）激活
+  #
+  # 机制：
+  #   if (ins_error / threshold) > risk_awareness_threshold:
+  #       计算到最近信标的曼哈顿距离
+  #       if 距离 < 上一步的距离:
+  #           奖励 = approach_beacon_reward  # 鼓励继续靠近
+  #       elif 距离 > 上一步的距离:
+  #           奖励 = -move_away_beacon_penalty  # 轻度惨罚远离
+  #       else:
+  #           奖励 = 0  # 中立
+  # 
+  # 当INS比值超过此阈值时，激活约束靠近激励（通常为0.6~0.8）
+  # 值越小越容易触发，值越大越仅在极度危险时触发
+  risk_awareness_threshold: 0.7
+  # 在危险区靠近信标时的奖励值
+  approach_beacon_reward: 0.5
+  # 在危险区远离信标时的惨罚值（扣除值）
+  move_away_beacon_penalty: 0.1
 
 stage:
   # 固定三阶段调度（A方案）
