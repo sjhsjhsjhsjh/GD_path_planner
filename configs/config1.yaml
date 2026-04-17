@@ -194,7 +194,7 @@ train:
 
 checkpoint:
   # 每 N 轮保存一次覆盖式 checkpoint（100覆盖200覆盖300...）
-  periodic_interval: 5000
+  periodic_interval: 200
   # 周期checkpoint文件名（固定文件名实现覆盖）
   periodic_filename: dqn_model_periodic.pt
   # 断点续训时默认恢复 replay buffer
