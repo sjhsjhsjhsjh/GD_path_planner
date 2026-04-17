@@ -9,7 +9,7 @@ env:
   obs_dim: 5
   # INS 误差终止阈值基线：当关闭动态阈值时直接使用该值；
   # 开启动态阈值时作为 default 值与上限裁剪参考。
-  ins_error_threshold: 15
+  ins_error_threshold: 19
   # 是否按“起终点+信标分布”动态计算每个 episode 的 INS 阈值。
   dynamic_ins_error_threshold: true
   # 动态阈值中的“路径走廊半宽”（单位：网格）：
@@ -23,7 +23,7 @@ env:
   dynamic_ins_min: 4
   # 动态阈值上限（最终阈值会被裁剪到 [dynamic_ins_min, dynamic_ins_max] 区间）。
   dynamic_ins_max: 15
-  init_energy_scale: 1.7
+  init_energy_scale: 2.0
   init_energy_short_scale: 2.3
   init_energy_short_step_threshold: 20
   init_energy_min: 20

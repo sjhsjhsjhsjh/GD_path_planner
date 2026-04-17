@@ -621,7 +621,15 @@ class Env:
         if not self.beacon_layout:
             return float("inf")
         min_dist = float("inf")
-        for beacon_x, beacon_y in self.beacon_layout:
+        for beacon in self.beacon_layout:
+            if isinstance(beacon, dict):
+                beacon_x = int(beacon.get("x", 0))
+                beacon_y = int(beacon.get("y", 0))
+            elif isinstance(beacon, (list, tuple)) and len(beacon) >= 2:
+                beacon_x = int(beacon[0])
+                beacon_y = int(beacon[1])
+            else:
+                continue
             dist = abs(pos[0] - beacon_x) + abs(pos[1] - beacon_y)
             if dist < min_dist:
                 min_dist = dist
