@@ -1,0 +1,48 @@
+git clone -b random_start_goal --single-branch https://github.com/sjhsjhsjhsjh/GD_path_planner.git
+vim ~/.bashrc
+chmod 777 nosleep 
+python -m pip install -r GD_path_planner/requirements.txt
+python -m pip install -r GD_path_planner/requirements_GPU.txt 
+nohup ./nosleep python GD_path_planner/runs.py > training.log 2>&1 & 
+
+#!/bin/bash
+
+get_healthz_url() {
+    # Read values from yaml file using grep/sed (no yq dependency)
+    spacekey=$(grep "^spacekey:" "/var/run/cloudstudio/space.yaml" | sed 's/spacekey: *//' | tr -d '\r')
+    region=$(grep "^region:" "/var/run/cloudstudio/space.yaml" | sed 's/region: *//' | tr -d '\r')
+    host=$(grep "^host:" "/var/run/cloudstudio/space.yaml" | sed 's/host: *//' | tr -d '\r')
+
+    # Output URL
+    echo "https://${spacekey}--api.${region}.${host}/healthz"
+}
+
+get_token() {
+    echo ${CS_HEALTHZ_TOKEN}
+}
+
+heartbeat() {
+    while true; do
+        curl -H "Authorization: Bearer `get_token`" `get_healthz_url` > /dev/null 2>&1 || echo "心跳请求失败" >&2
+        sleep 5
+    done
+}
+
+# echo "`date +'%F %T'` 开始执行命令"
+
+# 启动心跳子进程
+heartbeat &
+HEARTBEAT_PID=$!
+
+# 执行传入的命令
+"$@"
+COMMAND_EXIT_CODE=$?
+
+# 命令执行完毕，停止心跳子进程
+kill $HEARTBEAT_PID 2>/dev/null
+wait $HEARTBEAT_PID 2>/dev/null
+
+# echo "`date +'%F %T'` 命令执行完毕，心跳进程已停止"
+
+# 返回原命令的退出码
+exit $COMMAND_EXIT_CODE
