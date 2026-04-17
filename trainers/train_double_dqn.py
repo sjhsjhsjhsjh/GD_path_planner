@@ -109,9 +109,9 @@ def _action_delta(action: int) -> Tuple[int, int]:
 
 
 def encode_observation(
-    env: Env, obs: Tuple[int, int, int, int, int], small=11, large=21
+    env: Env, obs: Tuple[int, int, int, int, float], small=11, large=21
 ):
-    x, y, dx, dy, ins_error = [int(v) for v in obs]
+    x, y, dx, dy = [int(v) for v in obs[:4]]
     width = int(env.map_width)
     height = int(env.map_height)
 
@@ -119,7 +119,8 @@ def encode_observation(
     y_norm = y / max(1.0, height - 1)
     dx_norm = dx / max(1.0, width - 1)
     dy_norm = dy / max(1.0, height - 1)
-    ins_norm = ins_error / max(1.0, float(env.ins_error_threshold))
+    # ins_norm = ins_error / max(1.0, float(env.ins_error_threshold))
+    ins_norm = float(np.clip(obs[4], 0.0, 1.0))
 
     manhattan = abs(dx) + abs(dy)
     manhattan_norm = manhattan / max(1.0, float(env.step_total))

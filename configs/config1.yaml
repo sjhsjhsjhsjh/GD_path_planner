@@ -111,7 +111,7 @@ reward:
   # potential_delta 模式下的单步分量裁剪上限（绝对值）；0 表示不裁剪
   energy_potential_clip: 0.2
   energy_reward_weight: 0.05
-  beacon_reward_value: 0.2
+  beacon_reward_value: 0.5
   
   # =========================== 信标激励机制（方案1+方案3） ===========================
   # 【方案1：动态信标奖励】基于INS误差紧急程度动态调整信标奖励
@@ -132,7 +132,7 @@ reward:
   beacon_reward_urgency_threshold: 0.5
   # 加成的倍数系数：bulk = (ratio - threshold) * scale
   # 值越大，高紧急度下的激励越强
-  beacon_reward_urgency_scale: 2.0
+  beacon_reward_urgency_scale: 2.4
   
   # =========================== 【方案3：约束靠近激励】 ===========================
   # 当INS误差接近超靎时，显式激励Agent靠近信标区域（而不是直冲终点）
@@ -150,11 +150,11 @@ reward:
   # 
   # 当INS比值超过此阈值时，激活约束靠近激励（通常为0.6~0.8）
   # 值越小越容易触发，值越大越仅在极度危险时触发
-  risk_awareness_threshold: 0.7
+  risk_awareness_threshold: 0.6
   # 在危险区靠近信标时的奖励值
-  approach_beacon_reward: 0.5
+  approach_beacon_reward: 0.8
   # 在危险区远离信标时的惨罚值（扣除值）
-  move_away_beacon_penalty: 0.1
+  move_away_beacon_penalty: 0.2
 
 stage:
   # 固定三阶段调度（A方案）
